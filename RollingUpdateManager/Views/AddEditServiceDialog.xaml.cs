@@ -57,6 +57,20 @@ namespace RollingUpdateManager.Views
                 return;
             }
 
+            if (string.IsNullOrWhiteSpace(TxtHealthPath.Text) || !TxtHealthPath.Text.StartsWith("/"))
+            {
+                MessageBox.Show("La ruta de health-check debe comenzar con '/' (ej: /actuator/health).", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (!int.TryParse(TxtTimeout.Text, out var timeout) || timeout < 5 || timeout > 600)
+            {
+                MessageBox.Show("Timeout de health-check inválido (5–600 segundos).", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             var config = _existing ?? new ServiceConfig();
             config.Name                       = TxtName.Text.Trim();
             config.JarPath                    = TxtJarPath.Text.Trim();
@@ -65,8 +79,8 @@ namespace RollingUpdateManager.Views
             config.JvmArguments               = TxtJvmArgs.Text.Trim();
             config.JavaExecutable             = string.IsNullOrWhiteSpace(TxtJavaExe.Text) ? "java" : TxtJavaExe.Text.Trim();
             config.HealthCheckPath            = TxtHealthPath.Text.Trim();
-            config.HealthCheckTimeoutSeconds  = int.TryParse(TxtTimeout.Text, out var to) ? to : 60;
-            config.DrainDelayMilliseconds     = int.TryParse(TxtDrainDelay.Text, out var dd) ? dd : 3000;
+            config.HealthCheckTimeoutSeconds  = timeout;
+            config.DrainDelayMilliseconds     = int.TryParse(TxtDrainDelay.Text, out var dd) && dd >= 0 ? dd : 3000;
             config.AutoStart                  = ChkAutoStart.IsChecked == true;
 
             ResultConfig   = config;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using System.Threading;
 
 namespace RollingUpdateManager.Models
 {
@@ -110,6 +111,64 @@ namespace RollingUpdateManager.Models
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
+    //  Métricas del proxy en tiempo real (contadores thread-safe)
+    // ─────────────────────────────────────────────────────────────────────────────
+    public class ProxyMetrics
+    {
+        private long _totalRequests;
+        private long _totalErrors;       // respuestas 502 / errores de proxy
+        private long _totalLatencyMs;    // suma de latencias para calcular promedio
+
+        // ── Ventana deslizante de 1 s para req/s ──────────────────────────────
+        // Guardamos el conteo de la ventana anterior y el inicio de la ventana actual
+        private long _windowRequests;
+        private long _windowStartTicks = Environment.TickCount64;
+        private double _lastReqPerSec;
+
+        /// <summary>
+        /// Registra una petición completada.
+        /// Llamado desde el pipeline del proxy en cada respuesta (exitosa o error).
+        /// </summary>
+        public void RecordRequest(long latencyMs, bool isError)
+        {
+            Interlocked.Increment(ref _totalRequests);
+            Interlocked.Add(ref _totalLatencyMs, latencyMs);
+            if (isError) Interlocked.Increment(ref _totalErrors);
+            Interlocked.Increment(ref _windowRequests);
+        }
+
+        /// <summary>
+        /// Devuelve un snapshot instantáneo de las métricas.
+        /// Rota la ventana de req/s si han pasado ≥1 s.
+        /// </summary>
+        public (double ReqPerSec, double AvgLatencyMs, double ErrorPct) GetSnapshot()
+        {
+            long now = Environment.TickCount64;
+            long elapsed = now - Interlocked.Read(ref _windowStartTicks);
+
+            if (elapsed >= 1000)
+            {
+                long reqs = Interlocked.Exchange(ref _windowRequests, 0);
+                // Fijar nueva ventana
+                Interlocked.Exchange(ref _windowStartTicks, now);
+                _lastReqPerSec = elapsed > 0 ? reqs * 1000.0 / elapsed : 0;
+            }
+
+            long total  = Interlocked.Read(ref _totalRequests);
+            long errors = Interlocked.Read(ref _totalErrors);
+            long latSum = Interlocked.Read(ref _totalLatencyMs);
+
+            double avgLat  = total > 0 ? (double)latSum / total : 0;
+            double errPct  = total > 0 ? errors * 100.0 / total : 0;
+
+            return (_lastReqPerSec, avgLat, errPct);
+        }
+
+        /// <summary>Devuelve el total de peticiones procesadas desde el inicio.</summary>
+        public long TotalRequests => Interlocked.Read(ref _totalRequests);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
     //  Estado completo en tiempo de ejecución de un servicio registrado
     // ─────────────────────────────────────────────────────────────────────────────
     public class ServiceRuntimeState
@@ -119,6 +178,19 @@ namespace RollingUpdateManager.Models
         public ServiceInstance? Green { get; set; }
         public ServiceStatus OverallStatus { get; set; } = ServiceStatus.Stopped;
         public string LastError { get; set; } = string.Empty;
+
+        /// <summary>Métricas en tiempo real del proxy de este servicio.</summary>
+        public ProxyMetrics Metrics { get; } = new();
+
+        /// <summary>
+        /// Marca de tiempo desde la que el servicio corre de forma continua
+        /// sin redeploy, restart manual ni cambio de slot.
+        /// Se fija al pasar a Running y se resetea en cada RollingUpdate o RestartAsync.
+        /// El watchdog NO la resetea: un auto-restart transparente no rompe el contrato
+        /// de "mismo JAR, mismo slot" desde el punto de vista del operador.
+        /// null = servicio nunca ha llegado a Running desde que abrimos la app.
+        /// </summary>
+        public DateTime? StableUptimeSince { get; set; }
 
         /// <summary>Instancia activa (la que recibe tráfico del proxy).</summary>
         public ServiceInstance? ActiveInstance =>

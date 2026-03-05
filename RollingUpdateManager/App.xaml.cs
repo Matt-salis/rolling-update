@@ -1,5 +1,8 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -19,6 +22,11 @@ namespace RollingUpdateManager
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            // ── Auto-update: si existe un _new.exe junto a nosotros, somos el nuevo. ──
+            // El exe viejo ya fue renombrado a _old.exe por el script de swap;
+            // limpiamos el _old por si quedara de una actualización previa.
+            ApplyPendingUpdate();
 
             // ── Modo servicio de Windows (argumento --service) ─────────────────
             if (e.Args.Contains("--service"))
@@ -50,6 +58,13 @@ namespace RollingUpdateManager
             }
 
             // ── Modo GUI normal ────────────────────────────────────────────────
+            // Precalentar el thread pool: en un VPS con pocos vCPUs el pool arranca
+            // pequeño y tarda segundos en escalar. Con 6 JARs esto causa inanición.
+            {
+                int min = Math.Max(32, Environment.ProcessorCount * 8);
+                ThreadPool.SetMinThreads(min, min);
+            }
+
             _services = BuildServices();
 
             var mainVm     = _services.GetRequiredService<MainViewModel>();
@@ -97,6 +112,65 @@ namespace RollingUpdateManager
                 })
                 .Build()
                 .Run();
+        }
+
+        // ── Auto-update helpers ───────────────────────────────────────
+
+        /// <summary>
+        /// Limpia restos de actualizaciones anteriores (_old.exe).
+        /// Llamado al inicio de cada arranque.
+        /// </summary>
+        private static void ApplyPendingUpdate()
+        {
+            try
+            {
+                var exePath = Process.GetCurrentProcess().MainModule!.FileName;
+                var dir     = Path.GetDirectoryName(exePath)!;
+                var oldExe  = Path.Combine(dir, "RollingUpdateManager_old.exe");
+                if (File.Exists(oldExe))
+                    File.Delete(oldExe);
+            }
+            catch { /* no es crítico */ }
+        }
+
+        /// <summary>
+        /// Copia <paramref name="newExePath"/> junto al exe actual como _new.exe,
+        /// lanza un script cmd que espera 2 s (mientras este proceso cierra),
+        /// renombra el exe actual a _old.exe, renombra _new.exe al nombre definitivo
+        /// y arranca la nueva versión.
+        /// </summary>
+        public static void ScheduleUpdateAndRestart(string newExePath)
+        {
+            var current = Process.GetCurrentProcess().MainModule!.FileName;
+            var dir     = Path.GetDirectoryName(current)!;
+            var exeName = Path.GetFileName(current);
+            var newCopy = Path.Combine(dir, "RollingUpdateManager_new.exe");
+            var oldCopy = Path.Combine(dir, "RollingUpdateManager_old.exe");
+
+            // Copiar el nuevo exe junto al actual
+            File.Copy(newExePath, newCopy, overwrite: true);
+
+            // Script de swap: espera a que el proceso actual cierre, hace el swap y arranca
+            // Usamos variables con comillas para manejar rutas con espacios.
+            var script = $"""
+                @echo off
+                timeout /t 2 /nobreak >nul
+                move /Y "{current}" "{oldCopy}"
+                move /Y "{newCopy}" "{current}"
+                start "" "{current}"
+                """;
+
+            var batPath = Path.Combine(Path.GetTempPath(), "rum_update.bat");
+            File.WriteAllText(batPath, script);
+
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{batPath}\"")
+            {
+                CreateNoWindow  = true,
+                UseShellExecute = false
+            });
+
+            // Cerrar la aplicación para liberar el exe
+            Current.Shutdown();
         }
 
         protected override void OnExit(ExitEventArgs e)

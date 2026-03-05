@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using RollingUpdateManager.Infrastructure;
 using RollingUpdateManager.Models;
@@ -20,14 +21,54 @@ namespace RollingUpdateManager.Services
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "RollingUpdateManager", "diag.log");
 
+        // Canal de escritura asíncrona: los callers enolan mensajes sin tocar el disco.
+        // Un único Task de fondo drena el canal y escribe en lote, eliminando el I/O
+        // sincrónico del hot path de lectura de logs.
+        private static readonly Channel<string> _diagChannel =
+            Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
+            {
+                SingleReader          = true,
+                FullMode              = BoundedChannelFullMode.DropOldest   // nunca bloquear callers
+            });
+
+        static ProcessLauncher()
+        {
+            // Drainer: lee del canal en lote y escribe al disco de forma asíncrona
+            _ = Task.Run(async () =>
+            {
+                var sb = new StringBuilder(4096);
+                var reader = _diagChannel.Reader;
+                while (await reader.WaitToReadAsync().ConfigureAwait(false))
+                {
+                    sb.Clear();
+                    // Drena todo lo disponible en memoria antes de ir al disco
+                    while (reader.TryRead(out var msg))
+                        sb.AppendLine(msg);
+
+                    if (sb.Length == 0) continue;
+                    try
+                    {
+                        // Rotación: si supera 5 MB, truncar a la mitad
+                        if (File.Exists(DiagFile))
+                        {
+                            var info = new FileInfo(DiagFile);
+                            if (info.Length > 5 * 1024 * 1024)
+                            {
+                                var content = File.ReadAllText(DiagFile);
+                                File.WriteAllText(DiagFile, content.Substring(content.Length / 2));
+                            }
+                        }
+                        await File.AppendAllTextAsync(DiagFile, sb.ToString()).ConfigureAwait(false);
+                    }
+                    catch { /* nunca crashear el drainer */ }
+                }
+            });
+        }
+
         public static void Diag(string msg)
         {
-            try
-            {
-                File.AppendAllText(DiagFile,
-                    $"[{DateTime.Now:HH:mm:ss.fff}] {msg}{Environment.NewLine}");
-            }
-            catch { }
+            // Encolar sin bloquear — si el canal está lleno descarta el mensaje más antiguo
+            _diagChannel.Writer.TryWrite($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
         }
 
         public ProcessLauncher(PortManager portManager)
@@ -128,15 +169,17 @@ namespace RollingUpdateManager.Services
         private void StartReaderThread(StreamReader reader, ServiceInstance instance, bool isStderr)
         {
             var streamName = isStderr ? "stderr" : "stdout";
-            var thread = new Thread(() =>
+            // Task async en lugar de Thread bloqueante: libera el thread del pool mientras
+            // espera datos del pipe. Con 6 JARs esto ahorra ~12 threads de OS permanentes.
+            _ = Task.Run(async () =>
             {
-                Diag($"[{streamName}] reader thread arranco PID={instance.ProcessId}");
+                Diag($"[{streamName}] reader arranco PID={instance.ProcessId}");
                 int lineCount = 0;
                 try
                 {
                     while (true)
                     {
-                        var line = reader.ReadLine();
+                        var line = await reader.ReadLineAsync().ConfigureAwait(false);
                         if (line is null)
                         {
                             Diag($"[{streamName}] EOF tras {lineCount} lineas");
@@ -163,14 +206,8 @@ namespace RollingUpdateManager.Services
                     Diag($"[{streamName}] ERROR inesperado: {ex}");
                     EmitLog(instance, "ERROR", $"[Reader error] {ex.Message}");
                 }
-                Diag($"[{streamName}] reader thread termino");
-            })
-            {
-                IsBackground = true,
-                Name = $"{instance.ServiceId.Substring(0,8)}-{instance.Slot}-{streamName}"
-            };
-            thread.Start();
-            Diag($"[{streamName}] thread lanzado: {thread.Name}");
+                Diag($"[{streamName}] reader termino");
+            });
         }
 
         public async Task StopAsync(ServiceInstance instance, int gracefulMs = 5000)
@@ -181,13 +218,35 @@ namespace RollingUpdateManager.Services
                 return;
             }
             Diag($"StopAsync PID={instance.ProcessId}");
-            EmitLog(instance, "INFO", $"Deteniendo instancia {instance.Slot}...");
+            EmitLog(instance, "INFO", $"Deteniendo instancia {instance.Slot}…");
             try
             {
-                instance.Process.Kill(entireProcessTree: true);
-                using var cts = new CancellationTokenSource(gracefulMs);
-                try { await instance.Process.WaitForExitAsync(cts.Token); }
-                catch (OperationCanceledException) { }
+                // 1. Señal graceful primero: permite que Spring Boot haga flush de BD/caches.
+                //    CloseMainWindow envía WM_CLOSE en Windows; el proceso Java la convierte
+                //    en SIGTERM y activa los shutdown hooks registrados.
+                bool closedGracefully = false;
+                try
+                {
+                    closedGracefully = instance.Process.CloseMainWindow();
+                }
+                catch { /* proceso ya terminó o sin ventana */ }
+
+                if (closedGracefully)
+                {
+                    // Esperar hasta 3s a que el proceso termine por sí solo
+                    using var gracefulCts = new CancellationTokenSource(3000);
+                    try { await instance.Process.WaitForExitAsync(gracefulCts.Token); }
+                    catch (OperationCanceledException) { }
+                }
+
+                // 2. Si sigue vivo, forzar terminación
+                if (!instance.Process.HasExited)
+                {
+                    instance.Process.Kill(entireProcessTree: true);
+                    using var cts = new CancellationTokenSource(gracefulMs);
+                    try { await instance.Process.WaitForExitAsync(cts.Token); }
+                    catch (OperationCanceledException) { }
+                }
             }
             catch (Exception ex)
             {
@@ -196,7 +255,6 @@ namespace RollingUpdateManager.Services
             finally
             {
                 instance.Status = ServiceStatus.Stopped;
-                // Usar el delegate que evita doble liberación (comparte flag con process.Exited)
                 if (instance.ReleasePort is { } rel)
                     rel();
                 else

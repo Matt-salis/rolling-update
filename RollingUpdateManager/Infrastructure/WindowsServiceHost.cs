@@ -63,7 +63,7 @@ namespace RollingUpdateManager.Infrastructure
     public static class WindowsServiceInstaller
     {
         private const string ServiceName        = "RollingUpdateManager";
-        private const string ServiceDisplayName = "Rolling Update Manager";
+        private const string ServiceDisplayName = "MegaData Sistemas - Rolling Update Manager";
         private const string ServiceDescription = "Gestiona servicios JAR con estrategia Blue/Green sin downtime.";
 
         /// <summary>Instala el servicio con sc.exe.</summary>

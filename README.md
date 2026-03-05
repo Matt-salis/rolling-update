@@ -36,14 +36,14 @@ RollingUpdateManager/
 
 ## ⚙️ Tecnologías
 
-| Componente | Tecnología | Razón |
-|---|---|---|
-| UI | WPF (.NET 8) | Nativo Windows, MVVM maduro |
-| MVVM | CommunityToolkit.Mvvm | Source generators, ObservableProperty |
-| Proxy | Kestrel embebido (ASP.NET Core) | Sin proceso externo, target dinámico |
-| Tema | MaterialDesignThemes | UI moderna dark |
-| Persistencia | System.Text.Json (atómico) | Sin dependencia externa |
-| Servicio Windows | Microsoft.Extensions.Hosting.WindowsServices | Integración nativa |
+| Componente       | Tecnología                                   | Razón                                 |
+| ---------------- | -------------------------------------------- | ------------------------------------- |
+| UI               | WPF (.NET 8)                                 | Nativo Windows, MVVM maduro           |
+| MVVM             | CommunityToolkit.Mvvm                        | Source generators, ObservableProperty |
+| Proxy            | Kestrel embebido (ASP.NET Core)              | Sin proceso externo, target dinámico  |
+| Tema             | MaterialDesignThemes                         | UI moderna dark                       |
+| Persistencia     | System.Text.Json (atómico)                   | Sin dependencia externa               |
+| Servicio Windows | Microsoft.Extensions.Hosting.WindowsServices | Integración nativa                    |
 
 ---
 
@@ -64,6 +64,7 @@ Estado final:    GREEN activo (puerto interno 10002)
 ```
 
 **Si falla en cualquier paso:**
+
 - GREEN es apagado y su puerto liberado
 - Proxy continúa apuntando a BLUE
 - Error visible en la UI y log
@@ -73,21 +74,25 @@ Estado final:    GREEN activo (puerto interno 10002)
 ## 🚀 Compilar y ejecutar
 
 ### Requisitos
+
 - .NET 8 SDK: https://dotnet.microsoft.com/download/dotnet/8
 - Windows 10/11
 
 ### Compilar
+
 ```bash
 cd "d:\rolling update"
 dotnet build RollingUpdateManager.sln -c Release
 ```
 
 ### Ejecutar en modo GUI
+
 ```bash
 dotnet run --project RollingUpdateManager
 ```
 
 ### Instalar como servicio Windows (requiere administrador)
+
 ```bash
 # Compilar primero
 dotnet publish RollingUpdateManager -c Release -r win-x64 --self-contained -o publish/
@@ -100,6 +105,7 @@ publish\RollingUpdateManager.exe --uninstall
 ```
 
 ### O usar NSSM (recomendado para servicios)
+
 ```bash
 nssm install RollingUpdateManager "C:\ruta\RollingUpdateManager.exe" "--service"
 nssm set RollingUpdateManager AppDirectory "C:\ruta\"
@@ -110,17 +116,17 @@ nssm start RollingUpdateManager
 
 ## 📋 Configuración de un servicio
 
-| Campo | Descripción | Ejemplo |
-|---|---|---|
-| Nombre | Nombre visible en la UI | `API Gateway` |
-| JAR | Ruta al archivo .jar | `C:\apps\gateway.jar` |
-| Config | Ruta a .properties/.yml | `C:\apps\application.yml` |
-| Puerto público | Puerto fijo expuesto | `8080` |
-| JVM Args | Argumentos extra | `-Xmx512m -Xms256m` |
-| Health path | Endpoint de salud | `/actuator/health` |
-| Timeout | Segundos para health-check | `60` |
-| Drain delay | Ms antes de matar instancia vieja | `3000` |
-| Auto-start | Arranca con la app | `true` |
+| Campo          | Descripción                       | Ejemplo                   |
+| -------------- | --------------------------------- | ------------------------- |
+| Nombre         | Nombre visible en la UI           | `API Gateway`             |
+| JAR            | Ruta al archivo .jar              | `C:\apps\gateway.jar`     |
+| Config         | Ruta a .properties/.yml           | `C:\apps\application.yml` |
+| Puerto público | Puerto fijo expuesto              | `8080`                    |
+| JVM Args       | Argumentos extra                  | `-Xmx512m -Xms256m`       |
+| Health path    | Endpoint de salud                 | `/actuator/health`        |
+| Timeout        | Segundos para health-check        | `60`                      |
+| Drain delay    | Ms antes de matar instancia vieja | `3000`                    |
+| Auto-start     | Arranca con la app                | `true`                    |
 
 ---
 
@@ -156,6 +162,7 @@ Configurable en el JSON de datos directamente.
 ## 🏥 Health Check
 
 Orden de intentos:
+
 1. `GET http://localhost:{internalPort}/actuator/health` → JSON `{"status":"UP"}`
 2. Si no responde, fallback a TCP port-open
 3. Timeout configurable por servicio

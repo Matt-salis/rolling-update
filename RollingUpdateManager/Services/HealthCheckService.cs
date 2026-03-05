@@ -15,12 +15,16 @@ namespace RollingUpdateManager.Services
     /// </summary>
     public class HealthCheckService
     {
-        // HttpClient con pool propio: no comparte conexiones entre servicios distintos
-        private static readonly HttpClient _http = new(
+        // Fábrica de handlers: cada WaitForReadyAsync crea su propio HttpClient.
+        // Con 6 health-checks en paralelo sobre un solo cliente estático, las conexiones
+        // del pool se agotan y los checks se cuelgan esperando socket libre.
+        private static HttpClient MakeClient() => new(
             new SocketsHttpHandler
             {
                 ConnectTimeout           = TimeSpan.FromSeconds(3),
-                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                // Un único intento de conexión por check: no reintentar a nivel de socket
+                EnableMultipleHttp2Connections = false,
             })
         {
             Timeout = TimeSpan.FromSeconds(5)
@@ -37,20 +41,20 @@ namespace RollingUpdateManager.Services
         {
             var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
             var url      = $"http://localhost:{port}{path}";
+            using var http = MakeClient();
 
             while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
             {
-                // Abort rápido: si el proceso murió, no tiene sentido seguir esperando
                 if (process is not null && process.HasExited)
                     return false;
 
                 try
                 {
-                    var response = await _http.GetAsync(url, ct);
+                    var response = await http.GetAsync(url, ct);
                     if (response.IsSuccessStatusCode)
                     {
                         var body = await response.Content.ReadAsStringAsync(ct);
-                        if (IsUp(body)) return true;
+                        if (IsUp(body, response.IsSuccessStatusCode)) return true;
                     }
                 }
                 catch
@@ -102,33 +106,42 @@ namespace RollingUpdateManager.Services
             Process? process       = null,
             CancellationToken ct   = default)
         {
-            // Usar la mitad del timeout para HTTP (da tiempo al Spring Boot de arrancar)
-            int httpTimeout = Math.Max(timeoutSeconds / 2, Math.Min(timeoutSeconds, 15));
-            var httpOk = await WaitForHealthAsync(port, healthPath, httpTimeout, intervalSeconds, process, ct);
+            // Dar el timeout completo al HTTP actuator.
+            // Antes se dividía a la mitad (Math.Min(t,15)) dejando solo 15s para JARs pesados.
+            // El fallback TCP solo se usa si el HTTP no responde Y el proceso sigue vivo.
+            var httpOk = await WaitForHealthAsync(
+                port, healthPath, timeoutSeconds, intervalSeconds, process, ct);
             if (httpOk) return true;
 
             // Si el proceso ya murió, no hay nada que esperar
             if (process is not null && process.HasExited) return false;
 
-            // Fallback con el tiempo restante
-            int remaining = timeoutSeconds - httpTimeout;
-            if (remaining <= 0) return false;
-            return await WaitForPortAsync(port, remaining, intervalSeconds, process, ct);
+            // Fallback TCP: el JAR puede estar corriendo pero sin actuator configurado.
+            // Usar un timeout corto (10s o lo que quede si ya casi se agotó).
+            int tcpTimeout = Math.Min(10, intervalSeconds * 3);
+            return await WaitForPortAsync(port, tcpTimeout, intervalSeconds, process, ct);
         }
 
         // ── Parser de respuesta ──────────────────────────────────────────────────────
-        private static bool IsUp(string json)
+        private static bool IsUp(string json, bool isSuccessStatus)
         {
             try
             {
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("status", out var statusProp))
-                    return statusProp.GetString()?.Equals("UP", StringComparison.OrdinalIgnoreCase) == true;
+                {
+                    var status = statusProp.GetString();
+                    // Aceptar explícitamente solo "UP".
+                    // "UNKNOWN" y "OUT_OF_SERVICE" son estados de Spring Boot que indican
+                    // que la app arrancó pero aún no está lista para recibir tráfico.
+                    return string.Equals(status, "UP", StringComparison.OrdinalIgnoreCase);
+                }
             }
             catch { /* no es JSON válido */ }
 
-            // Si responde 200 pero no tiene "status", lo consideramos UP
-            return true;
+            // Si responde 200 pero NO tiene campo "status" (no es endpoint actuator)
+            // lo aceptamos como UP solo si el código fue 2xx.
+            return isSuccessStatus;
         }
     }
 }

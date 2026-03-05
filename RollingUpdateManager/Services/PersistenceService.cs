@@ -139,9 +139,18 @@ namespace RollingUpdateManager.Services
         {
             data.LastSaved = DateTime.UtcNow;
             var tmpPath = _dataFilePath + ".tmp";
-            await using (var stream = File.Create(tmpPath))
-                await JsonSerializer.SerializeAsync(stream, data, JsonOptions, ct);
-            File.Move(tmpPath, _dataFilePath, overwrite: true);
+            try
+            {
+                await using (var stream = File.Create(tmpPath))
+                    await JsonSerializer.SerializeAsync(stream, data, JsonOptions, ct);
+                File.Move(tmpPath, _dataFilePath, overwrite: true);
+            }
+            catch
+            {
+                // Limpiar archivo temporal para no dejar basura en el siguiente intento
+                try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                throw;
+            }
         }
 
         /// <summary>Ruta completa del archivo de datos.</summary>
