@@ -125,6 +125,23 @@
         <Label Content="Drain delay tras swap de proxy (ms)"/>
         <TextBox x:Name="TxtDrainDelay" Text="3000"/>
 
+        <!-- Timeouts del proxy -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <Label Content="Timeout proxy &#x2014; headers (seg)"/>
+                <TextBox x:Name="TxtProxyTimeout" Text="240" Tag="Ej: 240"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <Label Content="Timeout proxy &#x2014; body/PDF (seg)"/>
+                <TextBox x:Name="TxtProxyBodyTimeout" Text="230" Tag="Ej: 230"/>
+            </StackPanel>
+        </Grid>
+
         <!-- AutoStart -->
         <CheckBox x:Name="ChkAutoStart" Content="Iniciar automáticamente con la aplicación" IsChecked="True"/>
 

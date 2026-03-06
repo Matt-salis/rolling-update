@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RollingUpdateManager.Infrastructure;
 using RollingUpdateManager.Models;
 using RollingUpdateManager.Proxy;
 
@@ -25,6 +27,14 @@ namespace RollingUpdateManager.Services
         private readonly ProcessLauncher    _launcher;
         private readonly HealthCheckService _healthCheck;
         private readonly ProxyManager       _proxy;
+        private readonly HandoffService     _handoff;
+
+        // true cuando se llama DetachForHandoffAsync: indica a DisposeAsync que
+        // no debe matar los procesos Java (el nuevo exe los adoptará).
+        private bool _handoffMode;
+
+        /// <summary>Expuesto para que App.xaml.cs elija el timeout de DisposeAsync.</summary>
+        public bool IsHandoffMode => _handoffMode;
 
         // Estado en memoria de todos los servicios registrados
         private readonly ConcurrentDictionary<string, ServiceRuntimeState> _states = new();
@@ -51,27 +61,42 @@ namespace RollingUpdateManager.Services
             PortManager        portManager,
             ProcessLauncher    launcher,
             HealthCheckService healthCheck,
-            ProxyManager       proxy)
+            ProxyManager       proxy,
+            HandoffService     handoff)
         {
             _persistence = persistence;
             _portManager = portManager;
             _launcher    = launcher;
             _healthCheck = healthCheck;
             _proxy       = proxy;
+            _handoff     = handoff;
 
             // Suscribir logs de los procesos hijos
             _launcher.LogReceived += OnChildLog;
         }
 
-        // ── Inicialización: carga datos y arranca AutoStart ────────────────────
+        // ── Inicialización: carga datos y arranca AutoStart (o adopta handoff) ──────
         public async Task InitializeAsync(CancellationToken ct = default)
         {
             var data = await _persistence.LoadAsync(ct);
             _portManager.SetRange(data.PortRanges.RangeStart, data.PortRanges.RangeEnd);
 
+            foreach (var config in data.Services)
+            {
+                var state = new ServiceRuntimeState { Config = config };
+                _states[config.Id] = state;
+            }
+
+            // ── Intentar adoptar procesos del exe anterior (actualización en caliente) ──
+            var handoff = _handoff.TryReadAndDelete();
+            if (handoff is not null)
+            {
+                await ReattachFromHandoffAsync(handoff, ct);
+                return;  // No hacer AutoStart: los servicios ya están corriendo
+            }
+
+            // ── Arranque normal ────────────────────────────────────────────────────────
             // Precalentar el thread pool antes de lanzar los arranques en paralelo.
-            // En un VPS con 2-4 vCPUs el pool empieza en ProcessorCount threads;
-            // con 6 JARs arrancando a la vez el pool se satura y añade 1 thread/s.
             int autoStartCount = data.Services.Count(s => s.AutoStart);
             if (autoStartCount > 0)
             {
@@ -81,15 +106,7 @@ namespace RollingUpdateManager.Services
                     ThreadPool.SetMinThreads(needed, Math.Max(curIo, needed));
             }
 
-            foreach (var config in data.Services)
-            {
-                var state = new ServiceRuntimeState { Config = config };
-                _states[config.Id] = state;
-            }
-
             // Arranques escalonados: 2 segundos de offset entre cada JAR.
-            // Evita que 6 JVMs compitan por CPU/disco durante su fase de inicio
-            // y que todos los health-check timeouts expiren a la vez.
             int delay = 0;
             foreach (var config in data.Services)
             {
@@ -113,6 +130,211 @@ namespace RollingUpdateManager.Services
 
             // Iniciar watchdog que detecta procesos muertos externamente
             _watchdogTask = Task.Run(() => WatchdogLoopAsync(_watchdogCts.Token));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  HANDOFF — actualización del exe sin downtime para los servicios Java
+        // ═══════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Llamado por el exe SALIENTE justo antes de cerrarse durante una actualización.
+        ///
+        /// 1. Serializa el estado de todos los procesos vivos en handoff.json.
+        /// 2. Desactiva KILL_ON_JOB_CLOSE en el Job Object: el kernel NO matará los
+        ///    java.exe cuando este exe se cierre.
+        /// 3. Activa _handoffMode para que DisposeAsync solo cierre los proxies Kestrel
+        ///    (libera los puertos públicos) sin matar los java.exe.
+        ///
+        /// El nuevo exe leerá handoff.json al arrancar y llamará ReattachFromHandoffAsync.
+        /// </summary>
+        public async Task DetachForHandoffAsync(CancellationToken ct = default)
+        {
+            _handoffMode = true;
+
+            // Construir la lista de instancias vivas
+            var handoffState = new HandoffState();
+            foreach (var state in _states.Values)
+            {
+                foreach (var inst in new[] { state.Blue, state.Green })
+                {
+                    if (inst is null) continue;
+                    if (inst.Process is null || inst.Process.HasExited) continue;
+                    if (inst.Status != ServiceStatus.Running) continue;
+
+                    handoffState.Instances.Add(new HandoffInstance
+                    {
+                        ServiceId    = inst.ServiceId,
+                        Slot         = inst.Slot,
+                        ProcessId    = inst.ProcessId,
+                        InternalPort = inst.InternalPort,
+                        IsActive     = inst.Slot == state.Config.ActiveSlot,
+                        StartedAt    = inst.StartedAt ?? DateTime.UtcNow,
+                        JarPath      = inst.JarPath,
+                    });
+                }
+            }
+
+            // Persistir antes de cualquier otra acción
+            await _handoff.WriteAsync(handoffState, ct);
+            ProcessLauncher.Diag($"[Handoff] Escrito handoff.json con {handoffState.Instances.Count} instancia(s)");
+
+            // Desactivar KILL_ON_JOB_CLOSE: los java.exe sobrevivirán al cierre del exe
+            ProcessJobObject.Instance.DetachAll();
+        }
+
+        /// <summary>
+        /// Llamado por el exe ENTRANTE cuando encuentra handoff.json al arrancar.
+        ///
+        /// Por cada instancia del handoff:
+        ///   • Obtiene el proceso vivo mediante Process.GetProcessById.
+        ///   • Reconstruye el ServiceInstance en memoria (sin lanzar nada nuevo).
+        ///   • Reserva el puerto interno en el PortManager.
+        ///   • Reabre el proxy Kestrel en el puerto público → tráfico restaurado.
+        ///   • Re-asigna el proceso al nuevo Job Object para que quede protegido.
+        ///   • Si un proceso ya murió (raro), lo ignora y lo marca como Stopped.
+        /// </summary>
+        private async Task ReattachFromHandoffAsync(HandoffState handoff, CancellationToken ct = default)
+        {
+            ProcessLauncher.Diag($"[Handoff] Reattach: {handoff.Instances.Count} instancia(s) a adoptar");
+
+            foreach (var hi in handoff.Instances)
+            {
+                if (!_states.TryGetValue(hi.ServiceId, out var state))
+                {
+                    ProcessLauncher.Diag($"[Handoff] Servicio {hi.ServiceId} no encontrado en config — ignorado");
+                    continue;
+                }
+
+                // Intentar obtener el proceso vivo
+                Process? process = null;
+                try
+                {
+                    process = Process.GetProcessById(hi.ProcessId);
+                    // Validar que el PID no fue reciclado por el SO asignándolo a otro proceso.
+                    // Los procesos Java corren como "java" o "javaw"; cualquier otro nombre
+                    // indica reciclaje de PID y el proceso original ya murió.
+                    var procName = process.ProcessName;
+                    if (!procName.StartsWith("java", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ProcessLauncher.Diag($"[Handoff] PID={hi.ProcessId} fue reciclado (nombre actual: {procName}) — ignorado");
+                        process = null;
+                    }
+                    else if (process.HasExited)
+                    {
+                        process = null;
+                    }
+                }
+                catch
+                {
+                    ProcessLauncher.Diag($"[Handoff] PID={hi.ProcessId} ({hi.ServiceId}/{hi.Slot}) ya no existe");
+                }
+
+                if (process is null)
+                {
+                    Log(hi.ServiceId, "WARN",
+                        $"[Handoff] Instancia {hi.Slot} (PID {hi.ProcessId}) no encontrada. " +
+                        "Se reiniciará en el próximo Start manual o AutoStart.");
+                    continue;
+                }
+
+                // Reservar el puerto en el PortManager para evitar conflictos
+                try { _portManager.AcquirePortExact(hi.ServiceId, hi.InternalPort); }
+                catch { /* ya reservado o fuera de rango — continuar igualmente */ }
+
+                // Reconstruir ServiceInstance
+                var inst = new ServiceInstance
+                {
+                    ServiceId    = hi.ServiceId,
+                    Slot         = hi.Slot,
+                    InternalPort = hi.InternalPort,
+                    ProcessId    = hi.ProcessId,
+                    Status       = ServiceStatus.Running,
+                    StartedAt    = hi.StartedAt,
+                    JarPath      = hi.JarPath,
+                    Process      = process,
+                };
+
+                // ReleasePort delegate (thread-safe, una sola vez)
+                int released = 0;
+                inst.ReleasePort = () =>
+                {
+                    if (Interlocked.Exchange(ref released, 1) == 0)
+                        _portManager.ReleasePort(hi.InternalPort);
+                };
+
+                // IMPORTANTE: habilitar EnableRaisingEvents ANTES de suscribir Exited,
+                // y verificar HasExited DESPUÉS de suscribir para cerrar la ventana de carrera:
+                // proceso puede morir entre GetProcessById y la suscripción.
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) =>
+                {
+                    inst.ReleasePort?.Invoke();
+                    inst.Status = ServiceStatus.Stopped;
+                };
+
+                // Verificar si el proceso murió en la ventana de carrera
+                bool racedDeath = false;
+                try { racedDeath = process.HasExited; } catch { racedDeath = true; }
+                if (racedDeath)
+                {
+                    inst.ReleasePort?.Invoke();
+                    Log(hi.ServiceId, "WARN",
+                        $"[Handoff] PID={hi.ProcessId} murió durante la adopción (race). Se omite.");
+                    continue;
+                }
+
+                // Asignar slot en el estado
+                AssignSlot(state, hi.Slot, inst);
+                if (hi.IsActive)
+                    state.Config.ActiveSlot = hi.Slot;
+
+                // Re-asignar al Job Object del nuevo exe
+                ProcessJobObject.Instance.Assign(process);
+
+                Log(hi.ServiceId, "INFO",
+                    $"[Handoff] Adoptado PID={hi.ProcessId} slot={hi.Slot} " +
+                    $"puerto interno={hi.InternalPort} activo={hi.IsActive}");
+            }
+
+            // Iniciar el watchdog ANTES del loop de proxies: si un proxy falla,
+            // los procesos ya adoptados deben quedar protegidos igualmente.
+            _watchdogTask = Task.Run(() => WatchdogLoopAsync(_watchdogCts.Token));
+
+            // Reconstruir proxies para todos los servicios que tienen instancia activa
+            foreach (var state in _states.Values)
+            {
+                var active = state.ActiveInstance;
+                if (active is null || active.Status != ServiceStatus.Running) continue;
+
+                try
+                {
+                    await _proxy.EnsureProxyAsync(
+                        state.Config.Id,
+                        state.Config.PublicPort,
+                        active.InternalPort,
+                        state.Metrics,
+                        state.Config.ProxyTimeoutSeconds,
+                        state.Config.ProxyBodyTimeoutSeconds,
+                        ct);
+
+                    state.OverallStatus = ServiceStatus.Running;
+                    state.StableUptimeSince ??= DateTime.UtcNow;
+
+                    Log(state.Config.Id, "INFO",
+                        $"[Handoff] Proxy restaurado :{state.Config.PublicPort} → " +
+                        $":{active.InternalPort} ({state.Config.ActiveSlot})");
+                }
+                catch (Exception ex)
+                {
+                    Log(state.Config.Id, "ERROR",
+                        $"[Handoff] No se pudo restaurar proxy para {state.Config.Name}: {ex.Message}");
+                    state.OverallStatus = ServiceStatus.Error;
+                }
+
+                NotifyStateChange(state);
+            }
+
+            ProcessLauncher.Diag("[Handoff] Reattach completado");
         }
 
         // ── Registrar / actualizar configuración ────────────────────────────────────────
@@ -161,7 +383,8 @@ namespace RollingUpdateManager.Services
                         try
                         {
                             await _proxy.RebindPublicPortAsync(
-                                config.Id, config.PublicPort, activeInst.InternalPort, state.Metrics, ct);
+                                config.Id, config.PublicPort, activeInst.InternalPort, state.Metrics,
+                                config.ProxyTimeoutSeconds, config.ProxyBodyTimeoutSeconds, ct);
                             Log(config.Id, "INFO",
                                 $"Proxy relanzado correctamente en :{config.PublicPort}.");
                         }
@@ -262,7 +485,8 @@ namespace RollingUpdateManager.Services
 
                 // Levantar proxy si no existe o actualizar target
                 await _proxy.EnsureProxyAsync(
-                    serviceId, config.PublicPort, instance.InternalPort, state.Metrics, ct);
+                    serviceId, config.PublicPort, instance.InternalPort, state.Metrics,
+                    config.ProxyTimeoutSeconds, config.ProxyBodyTimeoutSeconds, ct);
 
                 Log(serviceId, "INFO",
                     $"Servicio iniciado correctamente en puerto público {config.PublicPort} " +
@@ -814,13 +1038,22 @@ namespace RollingUpdateManager.Services
             if (_watchdogTask is not null)
                 try { await _watchdogTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
 
-            // Apagado silencioso: no tocar AutoStart ni persistir durante el cierre de la app
-            var stops = new List<Task>();
-            foreach (var state in _states.Values)
-                stops.Add(StopInstancesAsync(state));
-            await Task.WhenAll(stops);
-
-            await _proxy.DisposeAsync();
+            if (_handoffMode)
+            {
+                // En modo handoff NO matamos los procesos Java: el nuevo exe los adoptará.
+                // Solo cerramos los listeners del proxy para liberar los puertos públicos
+                // (el nuevo exe abrirá sus propios listeners en esos mismos puertos).
+                await _proxy.DisposeAsync();
+            }
+            else
+            {
+                // Apagado normal: matar todos los procesos hijos
+                var stops = new List<Task>();
+                foreach (var state in _states.Values)
+                    stops.Add(StopInstancesAsync(state));
+                await Task.WhenAll(stops);
+                await _proxy.DisposeAsync();
+            }
 
             // Liberar todos los mutexes
             foreach (var sem in _serviceLocks.Values)

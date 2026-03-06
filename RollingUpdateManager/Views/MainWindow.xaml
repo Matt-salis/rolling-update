@@ -116,7 +116,10 @@
                              SelectedItem="{Binding SelectedService}"
                              Background="Transparent"
                              BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Padding"       Value="0"/>
@@ -425,19 +428,20 @@
                               HorizontalScrollBarVisibility="Auto"
                               Background="#1A1A1A"
                               Visibility="{Binding SelectedService, Converter={StaticResource BoolToVis}}">
-                    <TextBox x:Name="LogTextBox"
-                             Background="#1A1A1A"
-                             Foreground="#D4D4D4"
-                             FontFamily="Consolas"
-                             FontSize="12"
-                             BorderThickness="0"
-                             IsReadOnly="True"
-                             IsReadOnlyCaretVisible="False"
-                             TextWrapping="NoWrap"
-                             AcceptsReturn="True"
-                             VerticalScrollBarVisibility="Disabled"
-                             HorizontalScrollBarVisibility="Disabled"
-                             Padding="6,4"/>
+                <TextBox x:Name="LogTextBox"
+                         Background="#1A1A1A"
+                         Foreground="#D4D4D4"
+                         FontFamily="Consolas"
+                         FontSize="12"
+                         BorderThickness="0"
+                         IsReadOnly="True"
+                         IsReadOnlyCaretVisible="False"
+                         IsUndoEnabled="False"
+                         TextWrapping="NoWrap"
+                         AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Disabled"
+                         HorizontalScrollBarVisibility="Disabled"
+                         Padding="6,4"/>
                 </ScrollViewer>
             </Grid>
         </Grid>

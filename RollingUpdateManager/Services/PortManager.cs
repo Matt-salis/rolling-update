@@ -95,6 +95,16 @@ namespace RollingUpdateManager.Services
                     _reservedPorts.TryRemove(kv.Key, out _);
         }
 
+        /// <summary>
+        /// Reserva un puerto específico para un servicio (usado en el handoff para
+        /// re-registrar los puertos que ya estaban en uso por los procesos adoptados).
+        /// No comprueba si está disponible en el SO porque el proceso ya lo tiene abierto.
+        /// </summary>
+        public void AcquirePortExact(string serviceId, int port)
+        {
+            _reservedPorts[port] = serviceId;
+        }
+
         // ── Consultas ──────────────────────────────────────────────────────────
         public IReadOnlyDictionary<int, string> ReservedPorts => _reservedPorts;
 

@@ -19,6 +19,10 @@ namespace RollingUpdateManager.Views
         // CTS para cancelar cargas de texto pendientes al cambiar de tab/servicio.
         private CancellationTokenSource _loadCts = new();
 
+        // Si el ScrollViewer estaba al final antes del flush, auto-scrolleamos.
+        // Si el usuario subió para ver logs anteriores, NO lo movemos.
+        private bool _autoScroll = true;
+
         public MainWindow(MainViewModel vm)
         {
             InitializeComponent();
@@ -37,6 +41,20 @@ namespace RollingUpdateManager.Views
                 if (e.PropertyName == nameof(MainViewModel.SelectedService))
                     ReattachToService();
             };
+
+            // Detectar si el usuario scrolleó manualmente hacia arriba
+            LogScrollViewer.ScrollChanged += (_, e) =>
+            {
+                // Si el cambio fue causado por el contenido creciendo (ExtentHeight cambió)
+                // y el usuario NO lo provocó, no cambiamos _autoScroll.
+                // Si el usuario scrolleó (VerticalOffset cambió pero no por append), lo detectamos.
+                if (e.ExtentHeightChange == 0)
+                {
+                    // El usuario movió el scroll
+                    _autoScroll = LogScrollViewer.VerticalOffset >=
+                                  LogScrollViewer.ScrollableHeight - 2;
+                }
+            };
         }
 
         private void SlotTabClicked(object sender, RoutedEventArgs e)
@@ -46,9 +64,6 @@ namespace RollingUpdateManager.Views
             foreach (var t in _slotTabs)
                 t.IsChecked = ReferenceEquals(t, tab);
 
-            // Cambiar ViewingSlot dispara OnViewingSlotChanged → Interlocked.Increment(_viewGen)
-            // → SlotViewChanged → OnSlotViewChanged() aquí abajo.
-            // No llamamos LoadLogAsync aquí directamente: lo hace OnSlotViewChanged.
             _trackedService.ViewingSlot = tab.Tag switch
             {
                 "Blue"  => InstanceSlot.Blue,
@@ -61,7 +76,7 @@ namespace RollingUpdateManager.Views
         {
             if (_trackedService is not null)
             {
-                _trackedService.NewLogLine      -= OnNewLogLine;
+                _trackedService.PendingLogReady -= OnPendingLogReady;
                 _trackedService.SlotViewChanged -= OnSlotViewChanged;
             }
 
@@ -69,8 +84,10 @@ namespace RollingUpdateManager.Views
 
             if (_trackedService is not null)
             {
-                _trackedService.NewLogLine      += OnNewLogLine;
+                _trackedService.PendingLogReady += OnPendingLogReady;
                 _trackedService.SlotViewChanged += OnSlotViewChanged;
+                _autoScroll = true;
+                _textBoxLineCount = 0;
                 LoadLogAsync(_trackedService);
             }
             else
@@ -83,14 +100,13 @@ namespace RollingUpdateManager.Views
         private void OnSlotViewChanged() => LoadLogAsync(_trackedService);
 
         /// <summary>
-        /// Carga el texto del slot actual de forma asíncrona.
-        /// Cancela cualquier carga pendiente antes de iniciar la nueva,
-        /// y captura la generación (ViewGen) para descartar si llega otra
-        /// mientras esta carga estaba en vuelo.
+        /// Carga el texto completo del slot actual de forma asíncrona.
+        /// Se llama al cambiar de servicio o de slot (tab).
+        /// El timer de flush (50ms) se encargará del streaming en tiempo real.
         /// </summary>
         private void LoadLogAsync(ServiceItemViewModel? svc)
         {
-            // Cancelar carga anterior: evita TextBox.Text asignaciones apiladas
+            // Cancelar carga anterior
             var old = Interlocked.Exchange(ref _loadCts, new CancellationTokenSource());
             old.Cancel();
             old.Dispose();
@@ -98,9 +114,8 @@ namespace RollingUpdateManager.Views
             if (svc is null) { CancelAndClearLog(); return; }
 
             var ct  = _loadCts.Token;
-            var gen = svc.ViewGen;   // generación en el momento de iniciar la carga
+            var gen = svc.ViewGen;
 
-            // Obtener el texto fuera del UI thread (GetCurrentLogText tiene lock interno)
             _ = Task.Run(() => svc.GetCurrentLogText(), ct)
                 .ContinueWith(t =>
                 {
@@ -111,12 +126,12 @@ namespace RollingUpdateManager.Views
                         System.Windows.Threading.DispatcherPriority.Background,
                         () =>
                         {
-                            // Doble verificación: si el usuario cambió de tab mientras
-                            // el Task.Run estaba corriendo, descartar el resultado.
                             if (ct.IsCancellationRequested) return;
                             if (svc.ViewGen != gen) return;
 
                             LogTextBox.Text = text;
+                            _textBoxLineCount = CountLines(text);
+                            _autoScroll = true;
                             LogScrollViewer.ScrollToBottom();
                         });
                 }, ct, TaskContinuationOptions.NotOnCanceled, TaskScheduler.Default);
@@ -127,25 +142,69 @@ namespace RollingUpdateManager.Views
             var old = Interlocked.Exchange(ref _loadCts, new CancellationTokenSource());
             old.Cancel(); old.Dispose();
             LogTextBox.Text = string.Empty;
+            _textBoxLineCount = 0;
         }
 
+        // Cuántas líneas máximo mantener en el TextBox visible.
+        // WPF TextBox hace layout O(n) por cada AppendText cuando el texto crece;
+        // con 2000 líneas y logs rápidos el UI thread se satura midiendo caracteres.
+        // Al superar este umbral hacemos un trim que descarta las primeras N/2 líneas.
+        private const int MaxTextBoxLines = 500;
+        private int _textBoxLineCount;
+
         /// <summary>
-        /// Línea nueva en tiempo real — solo se aplica si la generación coincide
-        /// con la vista actual, descartando líneas del slot anterior que llegaron
-        /// en tránsito durante un cambio de tab.
+        /// Recibe el texto batch acumulado en 50 ms y lo aplica al TextBox.
+        /// Solo hace ScrollToBottom si el usuario ya estaba al final.
+        /// Llamado en el UI thread por el _logFlushTimer de MainViewModel.
         /// </summary>
-        private void OnNewLogLine(string line, int gen)
+        private void OnPendingLogReady(string text)
         {
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+            if (_trackedService is null) return;
+
+            // Contar cuántas líneas vienen en el batch
+            int newLines = CountLines(text);
+            _textBoxLineCount += newLines;
+
+            // Si el TextBox acumuló demasiado texto, hacer trim para mantener rendimiento.
+            // WPF TextBox.Text = string es O(n) pero lo hacemos solo cuando necesario.
+            if (_textBoxLineCount > MaxTextBoxLines)
             {
-                // Si la generación ya no coincide, esta línea pertenece al slot
-                // anterior y no debe mostrarse en el slot actual.
-                if (_trackedService is null || _trackedService.ViewGen != gen) return;
-                LogTextBox.AppendText(line);
+                var current = LogTextBox.Text;
+                var trimmed = TailOfString(current, MaxTextBoxLines / 2);
+                LogTextBox.Text = trimmed;
+                _textBoxLineCount = MaxTextBoxLines / 2;
+            }
+
+            LogTextBox.AppendText(text);
+
+            if (_autoScroll)
                 LogScrollViewer.ScrollToBottom();
-            });
+        }
+
+        private static int CountLines(string s)
+        {
+            if (s.Length == 0) return 0;
+            int n = 0;
+            foreach (char c in s)
+                if (c == '\n') n++;
+            return n;
+        }
+
+        private static string TailOfString(string s, int maxLines)
+        {
+            if (s.Length == 0) return s;
+            int newlines = 0;
+            int pos = s.Length - 1;
+            if (s[pos] == '\n') pos--;
+            while (pos >= 0)
+            {
+                if (s[pos] == '\n') { newlines++; if (newlines == maxLines) { pos++; break; } }
+                pos--;
+            }
+            return pos <= 0 ? s : s.Substring(pos);
         }
     }
 }
+
 
 

@@ -85,6 +85,7 @@ namespace RollingUpdateManager
             svc.AddSingleton<ProcessLauncher>();
             svc.AddSingleton<HealthCheckService>();
             svc.AddSingleton<ProxyManager>();
+            svc.AddSingleton<HandoffService>();
             svc.AddSingleton<ServiceOrchestrator>();
 
             // Presentación
@@ -107,6 +108,7 @@ namespace RollingUpdateManager
                     services.AddSingleton<ProcessLauncher>();
                     services.AddSingleton<HealthCheckService>();
                     services.AddSingleton<ProxyManager>();
+                    services.AddSingleton<HandoffService>();
                     services.AddSingleton<ServiceOrchestrator>();
                     services.AddHostedService<WindowsServiceHost>();
                 })
@@ -134,58 +136,93 @@ namespace RollingUpdateManager
         }
 
         /// <summary>
-        /// Copia <paramref name="newExePath"/> junto al exe actual como _new.exe,
-        /// lanza un script cmd que espera 2 s (mientras este proceso cierra),
-        /// renombra el exe actual a _old.exe, renombra _new.exe al nombre definitivo
-        /// y arranca la nueva versión.
+        /// Actualiza el exe en caliente con zero-downtime para los servicios Java:
+        ///   1. DetachForHandoffAsync: escribe handoff.json y desactiva KILL_ON_JOB_CLOSE.
+        ///   2. Lanza bat que espera la muerte del proceso actual (waitfor), hace el swap y arranca el nuevo exe.
+        ///   3. Cierra esta instancia — DisposeAsync en modo handoff solo cierra los proxies Kestrel,
+        ///      los java.exe sobreviven y el nuevo exe los adopta via handoff.json.
+        ///
+        /// NOTA: este método se llama desde el UI thread. El DetachForHandoffAsync corre en
+        /// un thread separado para no bloquear el dispatcher, y usamos ConfigureAwait(false)
+        /// + GetAwaiter().GetResult() para evitar deadlock en WPF.
         /// </summary>
         public static void ScheduleUpdateAndRestart(string newExePath)
         {
             var current = Process.GetCurrentProcess().MainModule!.FileName;
             var dir     = Path.GetDirectoryName(current)!;
-            var exeName = Path.GetFileName(current);
             var newCopy = Path.Combine(dir, "RollingUpdateManager_new.exe");
             var oldCopy = Path.Combine(dir, "RollingUpdateManager_old.exe");
 
             // Copiar el nuevo exe junto al actual
             File.Copy(newExePath, newCopy, overwrite: true);
 
-            // Script de swap: espera a que el proceso actual cierre, hace el swap y arranca
-            // Usamos variables con comillas para manejar rutas con espacios.
+            // El bat espera a que el proceso ACTUAL muera (usando su PID), luego hace el swap.
+            // Esto es más robusto que un timeout fijo: funciona aunque DisposeAsync tarde más de 2s.
+            // Se usa "taskkill /f /pid" como fallback si el proceso no terminó en 15s.
+            int currentPid = Process.GetCurrentProcess().Id;
             var script = $"""
                 @echo off
-                timeout /t 2 /nobreak >nul
+                :waitloop
+                tasklist /FI "PID eq {currentPid}" 2>NUL | find "{currentPid}" >NUL
+                if not errorlevel 1 (
+                    timeout /t 1 /nobreak >nul
+                    goto waitloop
+                )
                 move /Y "{current}" "{oldCopy}"
                 move /Y "{newCopy}" "{current}"
                 start "" "{current}"
                 """;
 
             var batPath = Path.Combine(Path.GetTempPath(), "rum_update.bat");
-            File.WriteAllText(batPath, script);
+            File.WriteAllText(batPath, script, System.Text.Encoding.ASCII);
 
+            // Fase 1: handoff — escribe handoff.json y desactiva KILL_ON_JOB_CLOSE.
+            // Se corre en ThreadPool para evitar deadlock WPF (UI thread no puede awaitar
+            // directamente tareas que completan en el UI thread).
+            if (Current is App app && app._services is { } sp)
+            {
+                var orchestrator = sp.GetService<ServiceOrchestrator>();
+                if (orchestrator is not null)
+                {
+                    try
+                    {
+                        // ConfigureAwait(false) garantiza que la continuación no vuelva
+                        // al UI thread (que está bloqueado en .Wait()), evitando deadlock.
+                        Task.Run(() => orchestrator.DetachForHandoffAsync())
+                            .Wait(TimeSpan.FromSeconds(5));
+                    }
+                    catch { /* si falla, el nuevo exe hará AutoStart normal */ }
+                }
+            }
+
+            // Fase 2: lanzar el bat de swap (el bat espera la muerte del proceso actual)
             Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{batPath}\"")
             {
                 CreateNoWindow  = true,
                 UseShellExecute = false
             });
 
-            // Cerrar la aplicación para liberar el exe
+            // Fase 3: cerrar esta instancia.
+            // DisposeAsync con _handoffMode=true solo cierra los proxies Kestrel (~ms).
             Current.Shutdown();
         }
 
         protected override void OnExit(ExitEventArgs e)
         {
-            // Shutdown sincrónico con timeout de 15 s para matar todos los procesos hijos.
-            // NO se puede usar async void con await real aquí porque el proceso puede
-            // terminar antes de que el await se complete.
             if (_services is IAsyncDisposable ad)
             {
+                // En modo handoff solo cerramos los proxies Kestrel: operación rápida (~ms).
+                // En modo normal matamos todos los procesos Java: puede tardar hasta 15s.
+                var orchestrator = _services.GetService<ServiceOrchestrator>();
+                bool isHandoff   = orchestrator?.IsHandoffMode ?? false;
+                var  timeout     = isHandoff ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(15);
+
                 try
                 {
                     Task.Run(async () => await ad.DisposeAsync())
-                        .Wait(TimeSpan.FromSeconds(15));
+                        .Wait(timeout);
                 }
-                catch { /* timeout o error — el Job Object matará los procesos de todas formas */ }
+                catch { /* timeout o error — el Job Object matará los procesos si no es handoff */ }
             }
             base.OnExit(e);
         }

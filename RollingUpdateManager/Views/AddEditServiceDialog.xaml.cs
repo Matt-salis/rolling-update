@@ -27,10 +27,12 @@ namespace RollingUpdateManager.Views
             TxtPublicPort.Text = config.PublicPort.ToString();
             TxtJvmArgs.Text    = config.JvmArguments;
             TxtJavaExe.Text    = config.JavaExecutable;
-            TxtHealthPath.Text = config.HealthCheckPath;
-            TxtTimeout.Text    = config.HealthCheckTimeoutSeconds.ToString();
-            TxtDrainDelay.Text = config.DrainDelayMilliseconds.ToString();
-            ChkAutoStart.IsChecked = config.AutoStart;
+            TxtHealthPath.Text      = config.HealthCheckPath;
+            TxtTimeout.Text          = config.HealthCheckTimeoutSeconds.ToString();
+            TxtDrainDelay.Text       = config.DrainDelayMilliseconds.ToString();
+            TxtProxyTimeout.Text     = config.ProxyTimeoutSeconds.ToString();
+            TxtProxyBodyTimeout.Text = config.ProxyBodyTimeoutSeconds.ToString();
+            ChkAutoStart.IsChecked   = config.AutoStart;
         }
 
         // ── Guardar ────────────────────────────────────────────────────────────
@@ -81,6 +83,12 @@ namespace RollingUpdateManager.Views
             config.HealthCheckPath            = TxtHealthPath.Text.Trim();
             config.HealthCheckTimeoutSeconds  = timeout;
             config.DrainDelayMilliseconds     = int.TryParse(TxtDrainDelay.Text, out var dd) && dd >= 0 ? dd : 3000;
+            config.ProxyTimeoutSeconds        = int.TryParse(TxtProxyTimeout.Text, out var pt) && pt >= 10 && pt <= 600 ? pt : 240;
+            config.ProxyBodyTimeoutSeconds    = int.TryParse(TxtProxyBodyTimeout.Text, out var pb) && pb >= 10 && pb <= 600 ? pb : 230;
+            // Garantizar que body timeout < header timeout para evitar que el HttpClient
+            // corte el TCP antes de que el CTS del body pueda devolver un 504 limpio.
+            if (config.ProxyBodyTimeoutSeconds >= config.ProxyTimeoutSeconds)
+                config.ProxyBodyTimeoutSeconds = config.ProxyTimeoutSeconds - 10;
             config.AutoStart                  = ChkAutoStart.IsChecked == true;
 
             ResultConfig   = config;

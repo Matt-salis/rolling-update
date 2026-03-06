@@ -68,6 +68,18 @@ namespace RollingUpdateManager.Models
         /// <summary>Delay (ms) entre health-check OK y apagado de la instancia vieja.</summary>
         public int DrainDelayMilliseconds { get; set; } = 3000;
 
+        /// <summary>
+        /// Timeout (seg) para que el backend devuelva los headers de respuesta.
+        /// Cubre generación de PDFs y exports pesados. 0 = usar valor por defecto (240s).
+        /// </summary>
+        public int ProxyTimeoutSeconds { get; set; } = 240;
+
+        /// <summary>
+        /// Timeout (seg) para transferir el body completo de la respuesta al cliente.
+        /// Debe ser menor que ProxyTimeoutSeconds. 0 = usar valor por defecto (230s).
+        /// </summary>
+        public int ProxyBodyTimeoutSeconds { get; set; } = 230;
+
         /// <summary>Fecha de creación.</summary>
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
@@ -232,6 +244,37 @@ namespace RollingUpdateManager.Models
     {
         public int RangeStart { get; set; } = 10000;
         public int RangeEnd   { get; set; } = 19999;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    //  Handoff: estado que el exe viejo pasa al nuevo durante una auto-actualización
+    //  Se persiste en handoff.json y permite que el nuevo exe adopte procesos vivos
+    //  sin reiniciarlos (zero-downtime para los consumers de los servicios).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Estado de una instancia Java viva que el nuevo exe debe adoptar.
+    /// </summary>
+    public class HandoffInstance
+    {
+        public string        ServiceId    { get; set; } = string.Empty;
+        public InstanceSlot  Slot         { get; set; }
+        public int           ProcessId    { get; set; }
+        public int           InternalPort { get; set; }
+        public bool          IsActive     { get; set; }   // true = recibe tráfico del proxy
+        public DateTime      StartedAt    { get; set; }
+        public string        JarPath      { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Paquete completo de handoff escrito por el exe saliente.
+    /// El exe entrante lo lee al arrancar y, si existe, llama a ReattachFromHandoffAsync
+    /// en lugar del ciclo AutoStart normal.
+    /// </summary>
+    public class HandoffState
+    {
+        public DateTime             WrittenAt  { get; set; } = DateTime.UtcNow;
+        public List<HandoffInstance> Instances { get; set; } = new();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

@@ -88,10 +88,8 @@ namespace RollingUpdateManager.ViewModels
         }
 
         // Texto de logs por slot — cada uno tiene su propio StringBuilder
-        // NO exponemos LogText como ObservableProperty: el code-behind controla
-        // el TextBox directamente vía NewLogLine y SlotViewChanged.
-        // Esto evita la cadena: AddLog → LogText= → PropertyChanged → LoadLogAsync
-        // que mezclaba líneas del slot anterior con el nuevo durante el cambio.
+        // El code-behind NO recibe un BeginInvoke por línea: usa FlushPendingLog()
+        // llamado por el _logFlushTimer de MainViewModel cada 50 ms.
 
         private readonly System.Text.StringBuilder _logSbBlue     = new();
         private readonly System.Text.StringBuilder _logSbGreen    = new();
@@ -103,25 +101,44 @@ namespace RollingUpdateManager.ViewModels
         private const int MaxDisplayLines = 400;   // máximo que se renderiza en el TextBox
         private readonly object _logLock = new();
 
+        // Buffer de líneas pendientes de flush al TextBox (solo el slot visible).
+        // AddLog escribe aquí sin tocar el Dispatcher; FlushPendingLog lo drena en el UI thread.
+        private readonly System.Text.StringBuilder _pendingFlush = new();
+        private readonly object _flushLock = new();
+
         // Generation counter: se incrementa cada vez que cambia el slot visible.
-        // El code-behind lo captura al iniciar una carga y descarta si ya cambió.
         private int _viewGen;
         public  int ViewGen => _viewGen;
 
-        // Evento para que el code-behind haga AppendText directamente
-        // (más eficiente que reemplazar todo el texto en cada log)
-        // Parámetros: (line, gen) — el code-behind descarta si gen != ViewGen actual
-        public event Action<string, int>? NewLogLine;
-
-        // Notifica al code-behind que cambió el slot de visualización
+        // Notifica al code-behind que cambió el slot de visualización (recarga completa)
         public event Action? SlotViewChanged;
 
         partial void OnViewingSlotChanged(InstanceSlot? value)
         {
-            // Incrementar generación antes de notificar: cualquier NewLogLine
-            // en vuelo con la gen anterior será descartado por el code-behind.
-            Interlocked.Increment(ref _viewGen);
+            // Incrementar generación y limpiar buffer de flush pendiente:
+            // las líneas acumuladas del slot anterior no deben aparecer en el nuevo.
+            lock (_flushLock)
+            {
+                Interlocked.Increment(ref _viewGen);
+                _pendingFlush.Clear();
+            }
             SlotViewChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// Llamado por el _logFlushTimer de MainViewModel (50 ms) en el UI thread.
+        /// Devuelve el texto acumulado desde el último flush y limpia el buffer.
+        /// Retorna null si no hay nada pendiente (evita AppendText vacío).
+        /// </summary>
+        public string? TakePendingFlush()
+        {
+            lock (_flushLock)
+            {
+                if (_pendingFlush.Length == 0) return null;
+                var text = _pendingFlush.ToString();
+                _pendingFlush.Clear();
+                return text;
+            }
         }
 
         /// <summary>Devuelve el buffer del slot actualmente visible (para carga inicial).</summary>
@@ -209,6 +226,16 @@ namespace RollingUpdateManager.ViewModels
                 ? FormatStableUptime(DateTime.UtcNow - state.StableUptimeSince.Value)
                 : "—";
             if (StableUptimeLabel != newStable) StableUptimeLabel = newStable;
+
+            // Uptime de la instancia activa: se actualiza aquí (1 Hz) en lugar de en
+            // Update() que solo se llama en cambios de estado. Esto evita llamar
+            // StateChanged cada segundo solo para actualizar el contador de tiempo.
+            var active = state.ActiveInstance;
+            if (active is not null)
+            {
+                var up = FormatUptime(active.Uptime);
+                if (Uptime != up) Uptime = up;
+            }
         }
 
         private static string FormatStableUptime(TimeSpan t)
@@ -455,9 +482,6 @@ namespace RollingUpdateManager.ViewModels
 
         public void AddLog(string line, InstanceSlot slot)
         {
-            int gen;
-            bool isVisible;
-
             lock (_logLock)
             {
                 // ── Combined buffer ──
@@ -481,20 +505,37 @@ namespace RollingUpdateManager.ViewModels
                     if (_logLineCountGreen > MaxLogLines)
                         TrimBuffer(_logSbGreen, ref _logLineCountGreen);
                 }
-
-                // Capturar visibilidad y generación bajo el mismo lock
-                // para que sean coherentes con cualquier cambio de slot concurrente.
-                isVisible = ViewingSlot is null || ViewingSlot == slot;
-                gen       = _viewGen;
             }
 
-            // Solo notificar si la línea es del slot visible ahora mismo.
-            // El code-behind valida gen == ViewGen antes de AppendText, así
-            // que incluso si hay una race condition de microsegundos, el texto
-            // incorrecto nunca llega al TextBox.
+            // Si la línea pertenece al slot actualmente visible, acumularla en
+            // _pendingFlush para que el timer de 50 ms la envíe al TextBox.
+            // NO hacemos BeginInvoke aquí: eso es lo que causaba el freeze.
+            bool isVisible = ViewingSlot is null || ViewingSlot == slot;
             if (isVisible)
-                NewLogLine?.Invoke(line + Environment.NewLine, gen);
+            {
+                lock (_flushLock)
+                    _pendingFlush.AppendLine(line);
+            }
         }
+
+        /// <summary>
+        /// Llamado desde el UI thread (por el _logFlushTimer de MainViewModel).
+        /// Devuelve el texto acumulado y lo envía al TextBox sin crear lambdas.
+        /// </summary>
+        public void FlushPendingLog()
+        {
+            var text = TakePendingFlush();
+            if (text is null) return;
+            // La llamada viene del UI thread — el caller (MainWindow) hace el AppendText+Scroll.
+            PendingLogReady?.Invoke(text);
+        }
+
+        /// <summary>
+        /// Raised en el UI thread con el texto batch listo para AppendText.
+        /// El handler en MainWindow.xaml.cs hace AppendText + ScrollToBottom condicionalmente.
+        /// </summary>
+        public event Action<string>? PendingLogReady;
+
 
         private static void TrimBuffer(System.Text.StringBuilder sb, ref int count)
         {
@@ -518,8 +559,12 @@ namespace RollingUpdateManager.ViewModels
 
         private static string FormatUptime(TimeSpan t)
         {
+            // Granularidad reducida para servicios con largo tiempo de ejecución:
+            // evita PropertyChanged (y re-render del item de lista) cada segundo
+            // cuando el servicio lleva horas corriendo.
             if (t.TotalDays >= 1)   return $"{(int)t.TotalDays}d {t.Hours:D2}h {t.Minutes:D2}m";
-            if (t.TotalHours >= 1)  return $"{t.Hours:D2}h {t.Minutes:D2}m {t.Seconds:D2}s";
+            if (t.TotalHours >= 1)  return $"{t.Hours:D2}h {t.Minutes:D2}m";
+            if (t.TotalMinutes >= 5) return $"{t.Minutes:D2}m";
             return $"{t.Minutes:D2}m {t.Seconds:D2}s";
         }
     }
@@ -558,6 +603,15 @@ namespace RollingUpdateManager.ViewModels
                     svc.RefreshMetrics();
             };
             _metricsTimer.Start();
+
+            // Flush de logs: agrupa las líneas acumuladas en el buffer del VM seleccionado
+            // en un solo AppendText cada 50 ms, en lugar de un BeginInvoke por línea.
+            _logFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _logFlushTimer.Tick += (_, _) => SelectedService?.FlushPendingLog();
+            _logFlushTimer.Start();
         }
 
         private int _initialized = 0;
@@ -711,7 +765,12 @@ namespace RollingUpdateManager.ViewModels
 
             if (result != System.Windows.MessageBoxResult.Yes) return;
 
-            App.ScheduleUpdateAndRestart(dialog.FileName);
+            // Ejecutar todo en background: File.Copy puede tardar (EXE de ~190MB en red o disco lento),
+            // y el handoff interno tiene un Task.Run().Wait(5s).
+            // Nada de esto debe bloquear el Dispatcher — la app se mantiene responsiva hasta Shutdown().
+            StatusBarText = "Preparando actualización... no cierres la aplicación.";
+            var newExePath = dialog.FileName;
+            Task.Run(() => App.ScheduleUpdateAndRestart(newExePath));
         }
 
         private bool HasSelectedService() => SelectedService is not null;
@@ -723,32 +782,50 @@ namespace RollingUpdateManager.ViewModels
             RemoveServiceCommand.NotifyCanExecuteChanged();
         }
 
+        // ── Coalescing de StateChanged ─────────────────────────────────────
+        // Por cada serviceId guardamos si ya hay un dispatch de Update pendiente.
+        // Usamos int[] (array de 1 elemento) como wrapper de referencia para
+        // poder hacer Interlocked.Exchange sobre el campo dentro del diccionario.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int[]>
+            _pendingStateUpdate = new();
+
         // ── Handlers de eventos del orquestador ───────────────────────────────
         private void OnStateChanged(ServiceRuntimeState state)
         {
-            if (_serviceMap.TryGetValue(state.Config.Id, out var vm))
-                Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
-                    () => vm.Update(state));
+            if (!_serviceMap.TryGetValue(state.Config.Id, out var vm)) return;
+
+            // Obtener (o crear) el flag box para este servicio.
+            var box = _pendingStateUpdate.GetOrAdd(state.Config.Id, _ => new int[1]);
+
+            // Si ya había un dispatch pendiente (flag=1), no creamos otro.
+            // El BeginInvoke ya en vuelo leerá el estado más reciente cuando se ejecute.
+            if (System.Threading.Interlocked.Exchange(ref box[0], 1) == 1)
+                return;
+
+            var serviceId = state.Config.Id;
+            Application.Current.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                () =>
+                {
+                    // Limpiar ANTES de leer: si otro StateChanged llega mientras
+                    // ejecutamos vm.Update, generará su propio BeginInvoke.
+                    System.Threading.Interlocked.Exchange(ref box[0], 0);
+                    var latest = _orchestrator.GetState(serviceId);
+                    if (latest is not null) vm.Update(latest);
+                });
         }
 
-        private int _logCount = 0;
+        // ── Logs: acumulación + flush cada 50 ms ─────────────────────────────
+        // Con 6 servicios logueando pueden llegar cientos de líneas/seg.
+        // Un BeginInvoke por línea = cientos de layout-passes/seg = freeze.
+        // Solución: AddLog escribe al buffer del VM (sin dispatch al UI);
+        // _logFlushTimer flushea el TextBox visible en un único AppendText por tick.
+        private readonly DispatcherTimer _logFlushTimer;
 
         private void OnLogReceived(LogEntry entry)
         {
-            int n = System.Threading.Interlocked.Increment(ref _logCount);
-            if (n <= 5 || n % 100 == 0)
-            {
-                var shortId = entry.ServiceId.Length >= 8 ? entry.ServiceId.Substring(0, 8) : entry.ServiceId;
-                // Usar el canal async del ProcessLauncher (no File.AppendAllText sincrónico)
-                RollingUpdateManager.Services.ProcessLauncher.Diag($"OnLogReceived #{n} serviceId={shortId} mapSize={_serviceMap.Count} found={_serviceMap.ContainsKey(entry.ServiceId)}");
-            }
-
             if (_serviceMap.TryGetValue(entry.ServiceId, out var vm))
-            {
-                // Formatear el string una sola vez: AddLog lo usa para el buffer y NewLogLine
-                var formatted = entry.ToString();
-                vm.AddLog(formatted, entry.Slot);
-            }
+                vm.AddLog(entry.ToString(), entry.Slot);
         }
 
         private static void Diag(string msg) =>

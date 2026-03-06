@@ -151,6 +151,36 @@ namespace RollingUpdateManager.Infrastructure
             }
         }
 
+        /// <summary>
+        /// Libera el handle del Job Object SIN activar KILL_ON_JOB_CLOSE.
+        /// Se llama durante un handoff de actualización para que el kernel no mate
+        /// los procesos Java cuando este exe se cierra.
+        ///
+        /// Funcionamiento: primero se quita el flag KILL_ON_JOB_CLOSE del job mediante
+        /// SetInformationJobObject con LimitFlags = 0, luego se cierra el handle.
+        /// Los procesos asignados quedan huérfanos del job pero siguen corriendo.
+        /// El nuevo exe los adoptará por PID a través de HandoffService.
+        /// </summary>
+        public void DetachAll()
+        {
+            if (_jobHandle == IntPtr.Zero || _disposed) return;
+
+            // Quitar el flag KILL_ON_JOB_CLOSE antes de cerrar el handle
+            var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            info.BasicLimitInformation.LimitFlags = 0;   // sin límites → sin kill al cerrar
+            SetInformationJobObject(
+                _jobHandle,
+                JobObjectInfoType.ExtendedLimitInformation,
+                ref info,
+                Marshal.SizeOf(info));
+
+            DiagJob("[JobObject] DetachAll: KILL_ON_JOB_CLOSE desactivado para handoff");
+
+            // Cerrar el handle explícitamente: sin KILL_ON_JOB_CLOSE el cierre es inocuo
+            // para los procesos asignados pero libera el recurso del kernel.
+            Dispose();
+        }
+
         public void Dispose()
         {
             if (_disposed) return;

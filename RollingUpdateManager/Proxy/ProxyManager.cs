@@ -43,6 +43,8 @@ namespace RollingUpdateManager.Proxy
             int          publicPort,
             int          internalPort,
             ProxyMetrics metrics,
+            int          headerTimeoutSeconds = 240,
+            int          bodyTimeoutSeconds   = 230,
             CancellationToken ct = default)
         {
             if (_entries.TryGetValue(serviceId, out var existing))
@@ -51,7 +53,8 @@ namespace RollingUpdateManager.Proxy
                 return;
             }
 
-            var entry = new ProxyEntry(serviceId, publicPort, internalPort, metrics);
+            var entry = new ProxyEntry(serviceId, publicPort, internalPort, metrics,
+                                       headerTimeoutSeconds, bodyTimeoutSeconds);
             await entry.StartAsync(ct);
             _entries[serviceId] = entry;
         }
@@ -103,6 +106,8 @@ namespace RollingUpdateManager.Proxy
             int          newPublicPort,
             int          currentInternalPort,
             ProxyMetrics metrics,
+            int          headerTimeoutSeconds = 240,
+            int          bodyTimeoutSeconds   = 230,
             CancellationToken ct = default)
         {
             // Parar listener viejo
@@ -110,7 +115,8 @@ namespace RollingUpdateManager.Proxy
                 await old.StopAsync();
 
             // Crear nuevo listener en el puerto nuevo
-            var entry = new ProxyEntry(serviceId, newPublicPort, currentInternalPort, metrics);
+            var entry = new ProxyEntry(serviceId, newPublicPort, currentInternalPort, metrics,
+                                       headerTimeoutSeconds, bodyTimeoutSeconds);
             await entry.StartAsync(ct);
             _entries[serviceId] = entry;
         }
@@ -142,6 +148,8 @@ namespace RollingUpdateManager.Proxy
         private readonly int          _publicPort;
         private volatile int          _currentTarget;   // puerto interno actual (volatile para cambio atómico)
         private readonly ProxyMetrics _metrics;
+        private readonly int          _headerTimeoutSeconds;
+        private readonly int          _bodyTimeoutSeconds;
 
         private IHost?      _host;
         private HttpClient? _httpClient;  // un único client/handler; reutilizado entre updates
@@ -166,12 +174,15 @@ namespace RollingUpdateManager.Proxy
         public int CurrentTarget => _currentTarget;
         public int PublicPort    => _publicPort;
 
-        public ProxyEntry(string serviceId, int publicPort, int initialTarget, ProxyMetrics metrics)
+        public ProxyEntry(string serviceId, int publicPort, int initialTarget, ProxyMetrics metrics,
+                           int headerTimeoutSeconds = 240, int bodyTimeoutSeconds = 230)
         {
-            _serviceId     = serviceId;
-            _publicPort    = publicPort;
-            _currentTarget = initialTarget;
-            _metrics       = metrics;
+            _serviceId            = serviceId;
+            _publicPort           = publicPort;
+            _currentTarget        = initialTarget;
+            _metrics              = metrics;
+            _headerTimeoutSeconds = headerTimeoutSeconds > 0 ? headerTimeoutSeconds : 240;
+            _bodyTimeoutSeconds   = bodyTimeoutSeconds   > 0 ? bodyTimeoutSeconds   : 230;
         }
 
         // ── Cambio dinámico de target (thread-safe) ────────────────────────────
@@ -236,10 +247,14 @@ namespace RollingUpdateManager.Proxy
                     // Deshabilitar proxy del sistema: las peticiones son siempre a localhost
                     UseProxy                    = false,
                     AllowAutoRedirect           = false,    // el JAR maneja sus propios redirects
+                    // ResponseDrainTimeout: tiempo máximo para drenar un body de respuesta
+                    // (evita que conexiones pesadas bloqueen el pool indefinidamente)
+                    ResponseDrainTimeout        = TimeSpan.FromSeconds(_headerTimeoutSeconds),
                 })
             {
-                // Timeout global por request (headers): si el JAR no responde en 30s → 504
-                Timeout = TimeSpan.FromSeconds(30)
+                // Timeout global por request: tiempo hasta recibir los HEADERS de respuesta.
+                // No aplica al tiempo de transferencia del body (eso lo controla bodyCts abajo).
+                Timeout = TimeSpan.FromSeconds(_headerTimeoutSeconds)
             };
 
             _host = Host.CreateDefaultBuilder()
@@ -336,27 +351,31 @@ namespace RollingUpdateManager.Proxy
                     // CTS propio (no linked): evita la allocación de LinkedCancellationTokenSource
                     // en cada request. Si el cliente cancela, CopyToAsync lo detecta porque
                     // context.Response.Body está vinculado al socket.
-                    using var bodyCts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                    // bodyTimeout < headerTimeout: el timeout de body dispara primero,
+                    // permitiendo devolver un 504 limpio antes de que el HttpClient corte el TCP.
+                    using var bodyCts = new CancellationTokenSource(TimeSpan.FromSeconds(_bodyTimeoutSeconds));
                     await response.Content.CopyToAsync(context.Response.Body, bodyCts.Token);
                 }
-                catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
+                catch (OperationCanceledException)
                 {
-                    isError = true;
-                    if (!context.Response.HasStarted)
+                    if (context.RequestAborted.IsCancellationRequested)
                     {
-                        context.Response.StatusCode = 504;
-                        await context.Response.WriteAsync("Gateway Timeout: el servicio no respondió a tiempo.");
+                        // El cliente upstream cortó la conexión voluntariamente (navegador cerrado,
+                        // timeout del cliente, etc.). No es un error del proxy ni del backend.
+                        isError = false;
+                    }
+                    else
+                    {
+                        // bodyCts expiró: el backend tardó demasiado en transferir el body.
+                        isError = true;
+                        if (!context.Response.HasStarted)
+                        {
+                            context.Response.StatusCode = 504;
+                            await context.Response.WriteAsync("Gateway Timeout: el servicio no terminó de enviar la respuesta a tiempo.");
+                        }
                     }
                 }
-                catch (TaskCanceledException)
-                {
-                    isError = true;
-                    if (!context.Response.HasStarted)
-                    {
-                        context.Response.StatusCode = 504;
-                        await context.Response.WriteAsync("Gateway Timeout: el servicio no respondió en 30s.");
-                    }
-                }
+                // catch (TaskCanceledException) eliminado: OperationCanceledException lo cubre completamente
                 catch (Exception ex)
                 {
                     isError = true;
