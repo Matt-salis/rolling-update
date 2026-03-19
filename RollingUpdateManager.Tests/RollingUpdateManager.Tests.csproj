@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>RollingUpdateManager.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk"  Version="17.9.0"/>
+    <PackageReference Include="xunit"                   Version="2.7.0"/>
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="System.Text.Json"        Version="8.0.5"/>
+  </ItemGroup>
+
+  <!--
+    We reference only the non-WPF parts of the main project by re-using its
+    source files directly. This avoids a ProjectReference to a WinExe that
+    can't be loaded in a headless test runner (no WPF runtime on CI).
+  -->
+  <ItemGroup>
+    <Compile Include="..\RollingUpdateManager\Models\Models.cs"          Link="Models\Models.cs"/>
+    <Compile Include="..\RollingUpdateManager\Models\LogRingBuffer.cs"   Link="Models\LogRingBuffer.cs"/>
+    <Compile Include="..\RollingUpdateManager\Services\PortManager.cs"   Link="Services\PortManager.cs"/>
+    <Compile Include="..\RollingUpdateManager\Services\PersistenceService.cs" Link="Services\PersistenceService.cs"/>
+    <Compile Include="..\RollingUpdateManager\Infrastructure\HandoffService.cs" Link="Infrastructure\HandoffService.cs"/>
+  </ItemGroup>
+</Project>

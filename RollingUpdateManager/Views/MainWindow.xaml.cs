@@ -97,7 +97,13 @@ namespace RollingUpdateManager.Views
         }
 
         // Llamado cuando cambia el slot (tab Blue/Green/All).
-        private void OnSlotViewChanged() => LoadLogAsync(_trackedService);
+        // Limpiar de inmediato para que el usuario no vea contenido del slot anterior.
+        private void OnSlotViewChanged()
+        {
+            LogTextBox.Text   = string.Empty;
+            _textBoxLineCount = 0;
+            LoadLogAsync(_trackedService);
+        }
 
         /// <summary>
         /// Carga el texto completo del slot actual de forma asíncrona.
@@ -145,11 +151,19 @@ namespace RollingUpdateManager.Views
             _textBoxLineCount = 0;
         }
 
-        // Cuántas líneas máximo mantener en el TextBox visible.
-        // WPF TextBox hace layout O(n) por cada AppendText cuando el texto crece;
-        // con 2000 líneas y logs rápidos el UI thread se satura midiendo caracteres.
-        // Al superar este umbral hacemos un trim que descarta las primeras N/2 líneas.
-        private const int MaxTextBoxLines = 500;
+        /// <summary>Clears the visible TextBox without touching the in-memory ring buffer.</summary>
+        private void ClearLog_Click(object sender, RoutedEventArgs e)
+        {
+            LogTextBox.Text   = string.Empty;
+            _textBoxLineCount = 0;
+            _autoScroll       = true;
+        }
+
+        // Máximo de líneas en el TextBox visible. WPF TextBox hace layout O(n) por caracter;
+        // al superar este límite hacemos un trim que descarta las primeras N/2 líneas.
+        // 300 coincide con el tamaño del ring buffer, así el trim solo ocurre por streaming nuevo,
+        // no en la carga inicial.
+        private const int MaxTextBoxLines = 300;
         private int _textBoxLineCount;
 
         /// <summary>

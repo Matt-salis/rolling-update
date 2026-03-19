@@ -273,8 +273,15 @@ namespace RollingUpdateManager.Models
     /// </summary>
     public class HandoffState
     {
-        public DateTime             WrittenAt  { get; set; } = DateTime.UtcNow;
-        public List<HandoffInstance> Instances { get; set; } = new();
+        public DateTime             WrittenAt   { get; set; } = DateTime.UtcNow;
+        public List<HandoffInstance> Instances  { get; set; } = new();
+
+        /// <summary>
+        /// true = escrito al cerrar la app normalmente (no durante un swap de exe).
+        /// No se aplica el límite de 60 segundos: los servicios pueden haber quedado
+        /// corriendo horas antes de que el operador vuelva a abrir la aplicación.
+        /// </summary>
+        public bool IsPersistent { get; set; } = false;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

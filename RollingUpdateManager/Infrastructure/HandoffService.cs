@@ -75,10 +75,12 @@ namespace RollingUpdateManager.Infrastructure
 
             if (state is null) return null;
 
-            // Descartar si el handoff tiene más de 60 s: significa que el swap falló
-            // o que estamos ante un arranque manual posterior, no ante el nuevo exe
-            // lanzado por el bat de actualización.
-            if ((DateTime.UtcNow - state.WrittenAt).TotalSeconds > 60)
+            // Para un handoff de actualización de exe (IsPersistent = false) descartamos
+            // si han pasado más de 60 s: significa que el swap falló y los PIDs pueden
+            // haber sido reutilizados. Para el cierre normal (IsPersistent = true) no hay
+            // límite de tiempo: los servicios pueden llevar horas corriendo y el operador
+            // simplemente volvió a abrir la aplicación.
+            if (!state.IsPersistent && (DateTime.UtcNow - state.WrittenAt).TotalSeconds > 60)
                 return null;
 
             return state;

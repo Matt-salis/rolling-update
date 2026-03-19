@@ -54,6 +54,15 @@ namespace RollingUpdateManager.ViewModels
         [ObservableProperty] private string _avgLatencyMs = "—";
         [ObservableProperty] private string _errorRate    = "0.0%";
 
+        // ── Métricas de recursos del proceso activo (CPU/RAM) ─────────────────
+        [ObservableProperty] private string _cpuPercent = "—";
+        [ObservableProperty] private string _memMb      = "—";
+
+        // Estado previo para calcular delta de CPU (Process.TotalProcessorTime)
+        private DateTime _lastCpuSampleTime = DateTime.MinValue;
+        private TimeSpan _lastCpuTime       = TimeSpan.Zero;
+        private int      _lastCpuPid        = -1;
+
         // Tiempo de ejecución continua sin redeploy ni restart manual.
         // Se muestra como "12d 03h 45m" o "—" si nunca llegó a Running.
         [ObservableProperty] private string _stableUptimeLabel = "—";
@@ -87,19 +96,14 @@ namespace RollingUpdateManager.ViewModels
             UpdateJarCommand.NotifyCanExecuteChanged();
         }
 
-        // Texto de logs por slot — cada uno tiene su propio StringBuilder
-        // El code-behind NO recibe un BeginInvoke por línea: usa FlushPendingLog()
-        // llamado por el _logFlushTimer de MainViewModel cada 50 ms.
-
-        private readonly System.Text.StringBuilder _logSbBlue     = new();
-        private readonly System.Text.StringBuilder _logSbGreen    = new();
-        private readonly System.Text.StringBuilder _logSbCombined = new();
-        private int _logLineCountBlue;
-        private int _logLineCountGreen;
-        private int _logLineCountCombined;
-        private const int MaxLogLines     = 2000;  // máximo en los buffers internos
-        private const int MaxDisplayLines = 400;   // máximo que se renderiza en el TextBox
-        private readonly object _logLock = new();
+        // Ring buffers de logs por slot.
+        // Uso de memoria ≈ 300 strings × 3 buffers × ~100 bytes promedio ≈ 90 KB por servicio.
+        internal const int LogCapacity    = 300;  // entradas por ring
+        internal const int MaxDisplayLines = 300; // líneas máximo en el TextBox
+        private  readonly Models.LogRingBuffer _ringBlue     = new(LogCapacity);
+        private  readonly Models.LogRingBuffer _ringGreen    = new(LogCapacity);
+        private  readonly Models.LogRingBuffer _ringCombined = new(LogCapacity);
+        private  readonly object _logLock = new();
 
         // Buffer de líneas pendientes de flush al TextBox (solo el slot visible).
         // AddLog escribe aquí sin tocar el Dispatcher; FlushPendingLog lo drena en el UI thread.
@@ -152,36 +156,13 @@ namespace RollingUpdateManager.ViewModels
         {
             lock (_logLock)
             {
-                var sb = ViewingSlot switch
+                return ViewingSlot switch
                 {
-                    InstanceSlot.Blue  => _logSbBlue,
-                    InstanceSlot.Green => _logSbGreen,
-                    _                  => _logSbCombined
+                    InstanceSlot.Blue  => _ringBlue.BuildText(maxLines),
+                    InstanceSlot.Green => _ringGreen.BuildText(maxLines),
+                    _                  => _ringCombined.BuildText(maxLines)
                 };
-                return TailOfStringBuilder(sb, maxLines);
             }
-        }
-
-        private static string TailOfStringBuilder(System.Text.StringBuilder sb, int maxLines)
-        {
-            var full  = sb.ToString();
-            if (full.Length == 0) return full;
-
-            // Contar \n desde el final para encontrar el inicio de las últimas maxLines
-            int newlines = 0;
-            int pos      = full.Length - 1;
-            // Ignorar newline final si existe
-            if (full[pos] == '\n') { pos--; }
-            while (pos >= 0)
-            {
-                if (full[pos] == '\n')
-                {
-                    newlines++;
-                    if (newlines == maxLines) { pos++; break; }
-                }
-                pos--;
-            }
-            return pos <= 0 ? full : full.Substring(pos);
         }
 
         // ── Constructor ──────────────────────────────────────────────────
@@ -190,18 +171,14 @@ namespace RollingUpdateManager.ViewModels
             _orchestrator = orchestrator;
             Update(state);
 
-            // Cargar logs buffereados en los buffers por slot
+            // Cargar logs buffereados en los ring buffers por slot
             foreach (var entry in orchestrator.GetBufferedLogs(state.Config.Id))
             {
                 var line = entry.ToString();
-                _logSbCombined.AppendLine(line);
-                _logLineCountCombined++;
-                if (entry.Slot == InstanceSlot.Blue)
-                { _logSbBlue.AppendLine(line); _logLineCountBlue++; }
-                else
-                { _logSbGreen.AppendLine(line); _logLineCountGreen++; }
+                _ringCombined.Push(line);
+                if (entry.Slot == InstanceSlot.Blue)  _ringBlue.Push(line);
+                else                                  _ringGreen.Push(line);
             }
-            // _logText eliminado: el code-behind lee el buffer via GetCurrentLogText()
         }
 
         // Llamado por el timer global de MainViewModel (1 Hz), no por un timer propio.
@@ -227,14 +204,53 @@ namespace RollingUpdateManager.ViewModels
                 : "—";
             if (StableUptimeLabel != newStable) StableUptimeLabel = newStable;
 
-            // Uptime de la instancia activa: se actualiza aquí (1 Hz) en lugar de en
-            // Update() que solo se llama en cambios de estado. Esto evita llamar
-            // StateChanged cada segundo solo para actualizar el contador de tiempo.
+            // Uptime de la instancia activa
             var active = state.ActiveInstance;
             if (active is not null)
             {
                 var up = FormatUptime(active.Uptime);
                 if (Uptime != up) Uptime = up;
+            }
+
+            // ── CPU / RAM del proceso activo ──────────────────────────────────
+            var proc = active?.Process;
+            if (proc is not null && !proc.HasExited)
+            {
+                try
+                {
+                    proc.Refresh();
+                    var now      = DateTime.UtcNow;
+                    var cpuNow   = proc.TotalProcessorTime;
+                    var pid      = active!.ProcessId;
+
+                    if (_lastCpuPid == pid && _lastCpuSampleTime != DateTime.MinValue)
+                    {
+                        var wall   = (now - _lastCpuSampleTime).TotalSeconds;
+                        var cpuSec = (cpuNow - _lastCpuTime).TotalSeconds;
+                        var pct    = wall > 0 ? cpuSec / wall / Environment.ProcessorCount * 100.0 : 0;
+                        var newCpu = $"{pct:F1}%";
+                        if (CpuPercent != newCpu) CpuPercent = newCpu;
+                    }
+
+                    var newMem = $"{proc.WorkingSet64 / 1_048_576.0:F0} MB";
+                    if (MemMb != newMem) MemMb = newMem;
+
+                    _lastCpuSampleTime = now;
+                    _lastCpuTime       = cpuNow;
+                    _lastCpuPid        = pid;
+                }
+                catch
+                {
+                    _lastCpuPid = -1;
+                    if (CpuPercent != "—") CpuPercent = "—";
+                    if (MemMb      != "—") MemMb      = "—";
+                }
+            }
+            else
+            {
+                _lastCpuPid = -1;
+                if (CpuPercent != "—") CpuPercent = "—";
+                if (MemMb      != "—") MemMb      = "—";
             }
         }
 
@@ -484,27 +500,9 @@ namespace RollingUpdateManager.ViewModels
         {
             lock (_logLock)
             {
-                // ── Combined buffer ──
-                _logSbCombined.AppendLine(line);
-                _logLineCountCombined++;
-                if (_logLineCountCombined > MaxLogLines)
-                    TrimBuffer(_logSbCombined, ref _logLineCountCombined);
-
-                // ── Per-slot buffer ──
-                if (slot == InstanceSlot.Blue)
-                {
-                    _logSbBlue.AppendLine(line);
-                    _logLineCountBlue++;
-                    if (_logLineCountBlue > MaxLogLines)
-                        TrimBuffer(_logSbBlue, ref _logLineCountBlue);
-                }
-                else
-                {
-                    _logSbGreen.AppendLine(line);
-                    _logLineCountGreen++;
-                    if (_logLineCountGreen > MaxLogLines)
-                        TrimBuffer(_logSbGreen, ref _logLineCountGreen);
-                }
+                _ringCombined.Push(line);
+                if (slot == InstanceSlot.Blue) _ringBlue.Push(line);
+                else                           _ringGreen.Push(line);
             }
 
             // Si la línea pertenece al slot actualmente visible, acumularla en
@@ -537,25 +535,6 @@ namespace RollingUpdateManager.ViewModels
         public event Action<string>? PendingLogReady;
 
 
-        private static void TrimBuffer(System.Text.StringBuilder sb, ref int count)
-        {
-            // Encontrar el punto de corte (mitad de las líneas) sin Split:
-            // Split('\'n') aloca un array de 2000 strings en heap con cada trim.
-            // En su lugar escaneamos el string una sola vez buscando el newline N/2.
-            var full    = sb.ToString();
-            int target  = count / 2;   // líneas a eliminar
-            int pos     = 0;
-            int found   = 0;
-            while (pos < full.Length && found < target)
-            {
-                if (full[pos] == '\n') found++;
-                pos++;
-            }
-            sb.Clear();
-            if (pos < full.Length)
-                sb.Append(full, pos, full.Length - pos);
-            count -= found;
-        }
 
         private static string FormatUptime(TimeSpan t)
         {

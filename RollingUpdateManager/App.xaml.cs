@@ -157,20 +157,43 @@ namespace RollingUpdateManager
             File.Copy(newExePath, newCopy, overwrite: true);
 
             // El bat espera a que el proceso ACTUAL muera (usando su PID), luego hace el swap.
-            // Esto es más robusto que un timeout fijo: funciona aunque DisposeAsync tarde más de 2s.
-            // Se usa "taskkill /f /pid" como fallback si el proceso no terminó en 15s.
+            // Ventana visible para que cualquier error sea evidente al usuario.
+            // Grace de 2 s antes del move para que el AV termine de escanear el nuevo exe.
+            // Retry loop para el move por si el AV mantiene el lock un momento extra.
             int currentPid = Process.GetCurrentProcess().Id;
             var script = $"""
                 @echo off
+                echo [RUM] Esperando cierre de la aplicacion ({currentPid})...
                 :waitloop
                 tasklist /FI "PID eq {currentPid}" 2>NUL | find "{currentPid}" >NUL
                 if not errorlevel 1 (
                     timeout /t 1 /nobreak >nul
                     goto waitloop
                 )
-                move /Y "{current}" "{oldCopy}"
+                echo [RUM] Proceso terminado. Esperando 2 s para que el antivirus libere el archivo...
+                timeout /t 2 /nobreak >nul
+                echo [RUM] Instalando nueva version...
+                set /a tries=0
+                :moveloop
+                set /a tries=%tries%+1
+                if %tries% gtr 15 (
+                    echo [RUM] ERROR: No se pudo renombrar el ejecutable despues de 15 intentos.
+                    echo Cierra el antivirus temporalmente o ejecuta como administrador.
+                    pause
+                    exit /b 1
+                )
+                move /Y "{current}" "{oldCopy}" 2>NUL
+                if errorlevel 1 ( timeout /t 1 /nobreak >nul & goto moveloop )
                 move /Y "{newCopy}" "{current}"
-                start "" "{current}"
+                if errorlevel 1 (
+                    echo [RUM] ERROR al mover nuevo exe. Restaurando version anterior...
+                    move /Y "{oldCopy}" "{current}"
+                    pause
+                    exit /b 1
+                )
+                echo [RUM] Iniciando nueva version...
+                start /d "{dir}" "" "{current}"
+                exit /b 0
                 """;
 
             var batPath = Path.Combine(Path.GetTempPath(), "rum_update.bat");
@@ -195,11 +218,11 @@ namespace RollingUpdateManager
                 }
             }
 
-            // Fase 2: lanzar el bat de swap (el bat espera la muerte del proceso actual)
+            // Fase 2: lanzar el bat de swap (el bat espera la muerte del proceso actual).
+            // UseShellExecute=true abre una ventana cmd visible: si algo falla, el usuario lo ve.
             Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{batPath}\"")
             {
-                CreateNoWindow  = true,
-                UseShellExecute = false
+                UseShellExecute = true   // ventana visible — errores obvios al usuario
             });
 
             // Fase 3: cerrar esta instancia.
@@ -211,11 +234,30 @@ namespace RollingUpdateManager
         {
             if (_services is IAsyncDisposable ad)
             {
-                // En modo handoff solo cerramos los proxies Kestrel: operación rápida (~ms).
-                // En modo normal matamos todos los procesos Java: puede tardar hasta 15s.
                 var orchestrator = _services.GetService<ServiceOrchestrator>();
                 bool isHandoff   = orchestrator?.IsHandoffMode ?? false;
-                var  timeout     = isHandoff ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(15);
+
+                // Cierre normal (no swap de exe): guardar estado persistente para que los
+                // servicios Java continúen corriendo y la app los readopte al volver a abrirse.
+                // DetachForHandoffAsync escribe handoff.json (IsPersistent=true) y llama
+                // ProcessJobObject.DetachAll() para que los java.exe sobrevivan a nuestra muerte.
+                // Si falla (disco lleno, permisos, etc.) los procesos serán matados por el
+                // Job Object — comportamiento degradado aceptable.
+                if (!isHandoff && orchestrator is not null)
+                {
+                    try
+                    {
+                        Task.Run(() => orchestrator.DetachForHandoffAsync(persistent: true))
+                            .Wait(TimeSpan.FromSeconds(5));
+                        isHandoff = true;  // DisposeAsync solo cerrará los proxies Kestrel
+                    }
+                    catch { /* si falla, DisposeAsync matará los procesos normalmente */ }
+                }
+
+                // En modo handoff (update o cierre normal con state guardado) solo cerramos
+                // los proxies Kestrel: operación rápida (~ms).
+                // En modo normal (fallo al guardar state) matamos todos los procesos Java.
+                var timeout = isHandoff ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(15);
 
                 try
                 {

@@ -42,10 +42,11 @@ namespace RollingUpdateManager.Services
         // Mutex por servicio: evita que Start/Stop/Update corran en paralelo para el mismo servicio
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _serviceLocks = new();
 
-        // Buffer de logs por servicio (ring-buffer de 2000 entradas)
-        // Permite que la UI reciba logs aunque el VM se cree después del arranque
+        // Buffer de logs por servicio (ring-buffer de 300 entradas)
+        // Reducido de 2000 → 300 para minimizar el uso de memoria en el servidor.
+        // La UI solo muestra 300 líneas por slot; buffer más largo no aporta valor.
         private readonly ConcurrentDictionary<string, ConcurrentQueue<LogEntry>> _logBuffers = new();
-        private const int LogBufferMaxSize = 2000;
+        private const int LogBufferMaxSize = 300;
 
         // Watchdog: detecta procesos que murieron sin ser notificados por StopAsync
         private readonly CancellationTokenSource _watchdogCts = new();
@@ -147,12 +148,17 @@ namespace RollingUpdateManager.Services
         ///
         /// El nuevo exe leerá handoff.json al arrancar y llamará ReattachFromHandoffAsync.
         /// </summary>
-        public async Task DetachForHandoffAsync(CancellationToken ct = default)
+        /// <param name="persistent">
+        /// true = cierre normal de la app; los servicios deben seguir corriendo indefinidamente
+        /// y ReattachFromHandoffAsync no aplica límite de tiempo al leer el estado.
+        /// false (default) = swap de exe durante auto-actualización; límite de 60 s.
+        /// </param>
+        public async Task DetachForHandoffAsync(bool persistent = false, CancellationToken ct = default)
         {
             _handoffMode = true;
 
             // Construir la lista de instancias vivas
-            var handoffState = new HandoffState();
+            var handoffState = new HandoffState { IsPersistent = persistent };
             foreach (var state in _states.Values)
             {
                 foreach (var inst in new[] { state.Blue, state.Green })

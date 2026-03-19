@@ -1,0 +1,64 @@
+# ────────────────────────────────────────────────────────────────────────────
+#  .NET / MSBuild
+# ────────────────────────────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.ncrunchsolution
+*.ncrunchproject
+project.lock.json
+
+# Publish output — users build their own
+publish/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Roslyn / Source generators
+*.generated.cs
+
+# Test results
+TestResults/
+*.coverage
+*.coveragexml
+*.trx
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Runtime data  (user-specific, generated at runtime)
+# ────────────────────────────────────────────────────────────────────────────
+RollingUpdateManager/Data/
+# handoff file written during live exe swap
+**/handoff.json
+**/handoff.json.tmp
+# leftover from a failed self-update
+*RollingUpdateManager_old.exe
+*RollingUpdateManager_new.exe
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Visual Studio / Rider
+# ────────────────────────────────────────────────────────────────────────────
+*.rsuser
+*.DotSettings.user
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+# keep .editorconfig and extensions.json
+
+# ────────────────────────────────────────────────────────────────────────────
+#  OS
+# ────────────────────────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+$RECYCLE.BIN/
+*.lnk

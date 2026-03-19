@@ -6,12 +6,11 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="clr-namespace:RollingUpdateManager.ViewModels"
     xmlns:conv="clr-namespace:RollingUpdateManager.Converters"
-    xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
     mc:Ignorable="d"
-    Title="MegaData Sistemas - Rolling Update Manager"
+    Title="Rolling Update Manager"
     Icon="/logo.ico"
     Height="700" Width="1100"
-    MinHeight="600" MinWidth="900"
+    MinHeight="560" MinWidth="860"
     WindowStartupLocation="CenterScreen"
     Background="#1E1E1E">
 
@@ -21,6 +20,104 @@
         <conv:BoolToVisibilityConverter   x:Key="BoolToVis"/>
         <conv:SlotLabelToColorConverter   x:Key="SlotToColor"/>
         <conv:ZeroToEmptyConverter        x:Key="ZeroToEmpty"/>
+
+        <!-- ── Base template for all flat buttons ─────────────────────── -->
+        <ControlTemplate x:Key="FlatBtn" TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    CornerRadius="3" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.80"/></Trigger>
+                <Trigger Property="IsPressed"   Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.60"/></Trigger>
+                <Trigger Property="IsEnabled"   Value="False"><Setter TargetName="Bd" Property="Opacity" Value="0.30"/></Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <!-- service-card action buttons -->
+        <Style x:Key="BtnAct" TargetType="Button">
+            <Setter Property="Background"      Value="#2E7D32"/>
+            <Setter Property="Foreground"      Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding"         Value="8,3"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template"        Value="{StaticResource FlatBtn}"/>
+        </Style>
+        <Style x:Key="BtnStop"    TargetType="Button" BasedOn="{StaticResource BtnAct}"><Setter Property="Background" Value="#B71C1C"/></Style>
+        <Style x:Key="BtnRestart" TargetType="Button" BasedOn="{StaticResource BtnAct}"><Setter Property="Background" Value="#E65100"/></Style>
+        <Style x:Key="BtnRdploy" TargetType="Button" BasedOn="{StaticResource BtnAct}">
+            <Setter Property="Background" Value="#4527A0"/><Setter Property="Padding" Value="7,3"/>
+        </Style>
+        <Style x:Key="BtnUpd" TargetType="Button" BasedOn="{StaticResource BtnAct}">
+            <Setter Property="Background" Value="#0D47A1"/><Setter Property="Padding" Value="9,3"/>
+        </Style>
+        <!-- Kill port — subtle red, visible enough to find but not dominant -->
+        <Style x:Key="BtnKill" TargetType="Button">
+            <Setter Property="Background"      Value="#3A1010"/>
+            <Setter Property="Foreground"      Value="#CC5555"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding"         Value="7,3"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template"        Value="{StaticResource FlatBtn}"/>
+        </Style>
+        <!-- toolbar buttons -->
+        <Style x:Key="BtnTb" TargetType="Button">
+            <Setter Property="Foreground"      Value="#BBBBBB"/>
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding"         Value="10,5"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template"        Value="{StaticResource FlatBtn}"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#3C3C3C"/></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="BtnTbBlue" TargetType="Button" BasedOn="{StaticResource BtnTb}">
+            <Setter Property="Background" Value="#0D47A1"/><Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style x:Key="BtnTbRed" TargetType="Button" BasedOn="{StaticResource BtnTb}">
+            <Setter Property="Background" Value="#7F0000"/><Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style x:Key="BtnTbAmber" TargetType="Button" BasedOn="{StaticResource BtnTb}">
+            <Setter Property="Background" Value="#2A1800"/><Setter Property="Foreground" Value="#FFB74D"/>
+        </Style>
+
+        <!-- shared slot-tab ToggleButton -->
+        <Style x:Key="SlotTab" TargetType="ToggleButton">
+            <Setter Property="BorderBrush"     Value="Transparent"/>
+            <Setter Property="Foreground"      Value="#777"/>
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Padding"         Value="14,0"/>
+            <Setter Property="Margin"          Value="0"/>
+            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+            <Setter Property="FontSize"        Value="11"/>
+            <Setter Property="FontWeight"      Value="SemiBold"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Background"  Value="#1E1E1E"/>
+                                <Setter Property="Foreground"  Value="White"/>
+                                <Setter Property="BorderBrush" Value="#007ACC"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#2A2A2E"/></Trigger>
+                            <Trigger Property="IsEnabled"   Value="False"><Setter Property="Opacity" Value="0.35"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -33,60 +130,38 @@
         <!-- ══════════════════════════════════════════════════════════════════ -->
         <!--  TOOLBAR                                                           -->
         <!-- ══════════════════════════════════════════════════════════════════ -->
-        <Border Grid.Row="0" Background="#252526">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0">
-
-                <Button Content="➕ Agregar"
-                        Command="{Binding AddServiceCommand}"
-                        Margin="4,0" Padding="12,4"
-                        Background="#0078D4" Foreground="White"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <Button Content="✏️ Editar"
-                        Command="{Binding EditServiceCommand}"
-                        Margin="4,0" Padding="12,4"
-                        Background="#3C3C3C" Foreground="White"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <Button Content="🗑 Eliminar"
-                        Command="{Binding RemoveServiceCommand}"
-                        Margin="4,0" Padding="12,4"
-                        Background="#3C3C3C" Foreground="White"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <Separator Margin="8,4" Background="#555"/>
-
-                <Button Content="▶ Start All"
-                        Command="{Binding StartAllCommand}"
-                        Margin="4,0" Padding="12,4"
-                        Background="#388E3C" Foreground="White"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <Button Content="⏹ Stop All"
-                        Command="{Binding StopAllCommand}"
-                        Margin="4,0" Padding="12,4"
-                        Background="#C62828" Foreground="White"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <Separator Margin="8,4" Background="#555"/>
-
-                <Button Content="⬆️ Actualizar manager"
-                        Command="{Binding UpdateManagerCommand}"
-                        ToolTip="Actualiza este exe sin detener los servicios JAR"
-                        Margin="4,0" Padding="12,4"
-                        Background="#4A3000" Foreground="#FFD54F"
-                        BorderThickness="0" Cursor="Hand"/>
-
-                <TextBlock Text="MegaData Sistemas - Rolling Update Manager"
-                           Foreground="#AAAAAA" FontSize="13"
-                           VerticalAlignment="Center" Margin="20,0,0,0"/>
-
-                <Image Source="/logo.ico"
-                       Width="32" Height="32"
-                       Margin="10,0,0,0"
-                       VerticalAlignment="Center"
-                       RenderOptions.BitmapScalingMode="HighQuality"/>
-            </StackPanel>
+        <Border Grid.Row="0" Background="#252526" BorderBrush="#2D2D30" BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="False" VerticalAlignment="Stretch">
+                <!-- brand -->
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                    <Image Source="/logo.ico" Width="18" Height="18" VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <TextBlock Text="Rolling Update Manager"
+                               Foreground="#666" FontSize="12" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="7,0,0,0"/>
+                </StackPanel>
+                <!-- actions — right side -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Stretch" Margin="0,0,4,0">
+                    <Button Content="⬆ Manager" Style="{StaticResource BtnTbAmber}"
+                            Command="{Binding UpdateManagerCommand}"
+                            ToolTip="Actualiza este exe sin detener los servicios JAR"/>
+                    <Rectangle Width="1" Fill="#3C3C3C" Margin="4,9"/>
+                    <Button Content="▶ All" Style="{StaticResource BtnTbBlue}"
+                            Command="{Binding StartAllCommand}"
+                            ToolTip="Iniciar todos los servicios detenidos"
+                            Margin="0,0,2,0"/>
+                    <Button Content="⏹ All" Style="{StaticResource BtnTbRed}"
+                            Command="{Binding StopAllCommand}"
+                            ToolTip="Detener todos los servicios en ejecución"/>
+                    <Rectangle Width="1" Fill="#3C3C3C" Margin="4,9"/>
+                    <Button Content="+" Style="{StaticResource BtnTb}"
+                            Command="{Binding AddServiceCommand}"    ToolTip="Agregar servicio"/>
+                    <Button Content="✎" Style="{StaticResource BtnTb}"
+                            Command="{Binding EditServiceCommand}"   ToolTip="Editar servicio seleccionado"/>
+                    <Button Content="✕" Style="{StaticResource BtnTb}"
+                            Command="{Binding RemoveServiceCommand}" ToolTip="Eliminar servicio seleccionado"/>
+                </StackPanel>
+            </DockPanel>
         </Border>
 
         <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -94,13 +169,13 @@
         <!-- ══════════════════════════════════════════════════════════════════ -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="420" MinWidth="320"/>
-                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="360" MinWidth="260"/>
+                <ColumnDefinition Width="4"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
             <!-- ── Lista de servicios ──────────────────────────────────────── -->
-            <Border Grid.Column="0" Background="#252526" BorderBrush="#3C3C3C" BorderThickness="0,0,1,0">
+            <Border Grid.Column="0" Background="#252526" BorderBrush="#2D2D30" BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="32"/>
@@ -122,109 +197,98 @@
                              VirtualizingPanel.ScrollUnit="Pixel">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding"       Value="0"/>
-                                <Setter Property="Margin"        Value="4,2"/>
-                                <Setter Property="Background"    Value="Transparent"/>
-                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding"          Value="0"/>
+                                <Setter Property="Margin"           Value="3,2"/>
+                                <Setter Property="Background"       Value="Transparent"/>
+                                <Setter Property="BorderThickness"  Value="0"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                 <Style.Triggers>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#094771"/>
+                                        <Setter Property="Background" Value="#0A3D5F"/>
                                     </Trigger>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Background" Value="#2D2D30"/>
+                                        <Setter Property="Background" Value="#27272B"/>
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
                         </ListBox.ItemContainerStyle>
+
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="{x:Type vm:ServiceItemViewModel}">
-                                <Border Padding="10,8" CornerRadius="4">
+                                <Border Padding="10,7" CornerRadius="3">
                                     <Grid>
                                         <Grid.RowDefinitions>
-                                            <RowDefinition/>
-                                            <RowDefinition/>
-                                            <RowDefinition/>
-                                            <RowDefinition/>
+                                            <RowDefinition/>  <!-- name + status -->
+                                            <RowDefinition/>  <!-- ports + uptime -->
+                                            <RowDefinition/>  <!-- actions -->
+                                            <RowDefinition/>  <!-- CPU / RAM -->
+                                            <RowDefinition/>  <!-- proxy metrics -->
                                         </Grid.RowDefinitions>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
 
-                                        <!-- Nombre + indicador slot -->
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
-                                            <TextBlock Text="{Binding Name}"
-                                                       Foreground="White" FontSize="14" FontWeight="SemiBold"/>
-                                            <Border Background="{Binding ActiveSlotLabel, Converter={StaticResource SlotToColor}}"
-                                                    Margin="8,0,0,0" Padding="4,1" CornerRadius="3">
-                                                <TextBlock Text="{Binding ActiveSlotLabel}"
+                                        <!-- Row 0: name + slot badge  |  status pill -->
+                                        <DockPanel Grid.Row="0" LastChildFill="False">
+                                            <Border DockPanel.Dock="Right"
+                                                    Background="{Binding Status, Converter={StaticResource StatusToColor}}"
+                                                    Padding="5,1" CornerRadius="7" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Status, Converter={StaticResource StatusToText}}"
                                                            Foreground="White" FontSize="10"/>
                                             </Border>
-                                        </StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="#E0E0E0" FontSize="13" FontWeight="SemiBold"/>
+                                                <Border Background="{Binding ActiveSlotLabel, Converter={StaticResource SlotToColor}}"
+                                                        Margin="7,0,0,0" Padding="4,0" CornerRadius="3" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ActiveSlotLabel}"
+                                                               Foreground="White" FontSize="10"/>
+                                                </Border>
+                                            </StackPanel>
+                                        </DockPanel>
 
-                                        <!-- Status pill -->
-                                        <Border Grid.Row="0" Grid.Column="1"
-                                                Background="{Binding Status, Converter={StaticResource StatusToColor}}"
-                                                Padding="6,2" CornerRadius="8">
-                                            <TextBlock Text="{Binding Status, Converter={StaticResource StatusToText}}"
-                                                       Foreground="White" FontSize="11"/>
-                                        </Border>
-
-                                        <!-- Puertos -->
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                                   Foreground="#AAAAAA" FontSize="11" Margin="0,3,0,0">
-                                            <Run Text="Puerto público:"/>
-                                            <Run Text="{Binding PublicPort}" FontWeight="Bold" Foreground="#64B5F6"/>
-                                            <Run Text="  →  interno:"/>
-                                            <Run Text="{Binding ActiveInternalPort, Converter={StaticResource ZeroToEmpty}}"
-                                                 FontWeight="Bold" Foreground="#81C784"/>
+                                        <!-- Row 1: port info + uptimes (compact) -->
+                                        <TextBlock Grid.Row="1" Margin="0,3,0,0" Foreground="#5A5A5A" FontSize="10">
+                                            <Run Text=":"/><Run Text="{Binding PublicPort}" Foreground="#5B9BD5" FontWeight="SemiBold"/>
+                                            <Run Text="→"/><Run Text="{Binding ActiveInternalPort, Converter={StaticResource ZeroToEmpty}}"
+                                                                  Foreground="#6AAB74" FontWeight="SemiBold"/>
+                                            <Run Text="  ⏱"/><Run Text="{Binding Uptime}" Foreground="#717171"/>
+                                            <Run Text="  ✓"/><Run Text="{Binding StableUptimeLabel}" Foreground="#5A8A5E"/>
                                         </TextBlock>
 
-                                        <!-- Uptime + acciones rápidas -->
-                                        <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,6,0,0">
-                                            <Button Content="▶" ToolTip="Start"
-                                                    Command="{Binding StartCommand}"
-                                                    Padding="6,2" Margin="0,0,4,0"
-                                                    Background="#388E3C" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="⏹" ToolTip="Stop"
-                                                    Command="{Binding StopCommand}"
-                                                    Padding="6,2" Margin="0,0,4,0"
-                                                    Background="#C62828" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="🔄" ToolTip="Restart"
+                                        <!-- Row 2: action buttons -->
+                                        <DockPanel Grid.Row="2" Margin="0,5,0,0" LastChildFill="False">
+                                            <!-- kill port far right -->
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource BtnKill}"
+                                                    Content="⊗ Kill port" Command="{Binding KillPortCommand}"
+                                                    ToolTip="Matar proceso que ocupa el puerto público"/>
+                                            <!-- primary lifecycle -->
+                                            <Button Content="▶" Style="{StaticResource BtnAct}"
+                                                    Command="{Binding StartCommand}"    ToolTip="Start"   Margin="0,0,2,0"/>
+                                            <Button Content="⏹" Style="{StaticResource BtnStop}"
+                                                    Command="{Binding StopCommand}"    ToolTip="Stop"    Margin="0,0,2,0"/>
+                                            <Button Content="↺ Restart" Style="{StaticResource BtnRestart}"
                                                     Command="{Binding RestartCommand}"
-                                                    Padding="6,2" Margin="0,0,4,0"
-                                                    Background="#F57C00" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="🔁 Redeploy" ToolTip="Redeploy el mismo JAR (rolling update sin downtime)"
+                                                    ToolTip="Reinicio forzado — detiene y arranca (downtime ~3 s)"
+                                                    Margin="0,0,6,0"/>
+                                            <!-- deploy actions -->
+                                            <Button Content="⬆ Redeploy" Style="{StaticResource BtnRdploy}"
                                                     Command="{Binding RedeployCommand}"
-                                                    Padding="8,2" Margin="0,0,4,0"
-                                                    Background="#6A1B9A" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="⬆ Update JAR" ToolTip="Rolling update con nuevo JAR"
+                                                    ToolTip="Redeploy sin downtime — rolling update blue/green con el mismo JAR"
+                                                    Margin="0,0,2,0"/>
+                                            <Button Content="⬆ Update JAR" Style="{StaticResource BtnUpd}"
                                                     Command="{Binding UpdateJarCommand}"
-                                                    Padding="8,2" Margin="0,0,4,0"
-                                                    Background="#0078D4" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="☠ Kill puerto"
-                                                    ToolTip="Mata el proceso que esté ocupando el puerto público (proceso fantasma)"
-                                                    Command="{Binding KillPortCommand}"
-                                                    Padding="8,2"
-                                                    Background="#4A1010" Foreground="#FF6B6B" BorderThickness="0" Cursor="Hand"/>
-                                        </StackPanel>
+                                                    ToolTip="Seleccionar nuevo JAR y hacer rolling update sin downtime"/>
+                                        </DockPanel>
 
-                                        <TextBlock Grid.Row="2" Grid.Column="1"
-                                                   Text="{Binding Uptime}"
-                                                   Foreground="#888" FontSize="10"
-                                                   VerticalAlignment="Center" Margin="0,6,0,0"/>
+                                        <!-- Row 3: CPU / RAM del proceso activo -->
+                                        <TextBlock Grid.Row="3" Margin="0,4,0,0" Foreground="#4A4A4A" FontSize="10">
+                                            <Run Text="CPU "/><Run Text="{Binding CpuPercent}" Foreground="#7A9040" FontWeight="SemiBold"/>
+                                            <Run Text="  RAM "/><Run Text="{Binding MemMb}" Foreground="#3A7A8A" FontWeight="SemiBold"/>
+                                        </TextBlock>
 
-                                        <!-- Métricas del proxy -->
-                                        <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
-                                                   Foreground="#777" FontSize="10" Margin="0,4,0,0">
-                                            <Run Text="⚡"/>
-                                            <Run Text="{Binding ReqPerSec}" FontWeight="Bold" Foreground="#FFD54F"/>
-                                            <Run Text=" req/s  ⏱"/>
-                                            <Run Text="{Binding AvgLatencyMs}" FontWeight="Bold" Foreground="#4FC3F7"/>
-                                            <Run Text=" ms  ❌"/>
-                                            <Run Text="{Binding ErrorRate}" FontWeight="Bold" Foreground="#EF9A9A"/>
-                                            <Run Text="  🟢 up "/>
-                                            <Run Text="{Binding StableUptimeLabel}" FontWeight="Bold" Foreground="#A5D6A7"/>
+                                        <!-- Row 4: proxy metrics (requests, latency, errors) -->
+                                        <TextBlock Grid.Row="4" Margin="0,2,0,0" Foreground="#444" FontSize="10">
+                                            <Run Text="⚡"/><Run Text="{Binding ReqPerSec}" Foreground="#8A7900" FontWeight="SemiBold"/>
+                                            <Run Text="r/s  ⏱"/><Run Text="{Binding AvgLatencyMs}" Foreground="#336A8A" FontWeight="SemiBold"/>
+                                            <Run Text="ms  ✗"/><Run Text="{Binding ErrorRate}" Foreground="#7A2A2A" FontWeight="SemiBold"/>
                                         </TextBlock>
                                     </Grid>
                                 </Border>
@@ -235,213 +299,107 @@
             </Border>
 
             <!-- ── Splitter ────────────────────────────────────────────────── -->
-            <GridSplitter Grid.Column="1" Width="5"
-                          HorizontalAlignment="Stretch"
-                          Background="#3C3C3C"/>
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                          Background="#2A2A2E" Cursor="SizeWE"/>
 
             <!-- ── Panel derecho: logs ─────────────────────────────────────── -->
-            <Grid Grid.Column="2" Background="#1E1E1E">
+            <Grid Grid.Column="2" Background="#1A1A1A">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="36"/>
+                    <RowDefinition Height="32"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- Cabecera con tabs de slot -->
-                <Border Grid.Row="0" Background="#252526" BorderBrush="#3C3C3C" BorderThickness="0,0,0,1">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Stretch">
-
-                        <!-- Tab: Todos -->
-                        <ToggleButton x:Name="TabAll"
-                            Content="📋 Todos"
-                            IsChecked="True"
-                            Tag="{x:Null}"
-                            Click="SlotTabClicked"
-                            Padding="12,0" Margin="0" BorderThickness="0,0,0,2"
-                            Foreground="#AAAAAA" Background="Transparent"
-                            FontSize="11" FontWeight="Bold" Cursor="Hand">
-                            <ToggleButton.Style>
-                                <Style TargetType="ToggleButton">
-                                    <Setter Property="BorderBrush" Value="Transparent"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                                        Padding="{TemplateBinding Padding}">
-                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Background" Value="#1E1E1E"/>
-                                                        <Setter Property="BorderBrush" Value="#007ACC"/>
-                                                        <Setter Property="Foreground" Value="White"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Background" Value="#2D2D30"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ToggleButton.Style>
-                        </ToggleButton>
-
-                        <Rectangle Width="1" Fill="#3C3C3C" Margin="0,6"/>
-
-                        <!-- Tab: Blue -->
-                        <ToggleButton x:Name="TabBlue" Tag="Blue" Click="SlotTabClicked"
-                            Padding="12,0" Margin="0" BorderThickness="0,0,0,2"
-                            Foreground="#AAAAAA" Background="Transparent"
-                            FontSize="11" FontWeight="Bold" Cursor="Hand"
-                            IsEnabled="{Binding SelectedService.HasBlueInstance, FallbackValue=False}">
-                            <ToggleButton.Style>
-                                <Style TargetType="ToggleButton">
-                                    <Setter Property="BorderBrush" Value="Transparent"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                                        Padding="{TemplateBinding Padding}">
-                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Background" Value="#1E1E1E"/>
-                                                        <Setter Property="BorderBrush" Value="#1565C0"/>
-                                                        <Setter Property="Foreground" Value="#64B5F6"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Background" Value="#2D2D30"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsEnabled" Value="False">
-                                                        <Setter Property="Opacity" Value="0.35"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ToggleButton.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🔵 Blue" VerticalAlignment="Center"/>
-                                <!-- Indicador LIVE: visible solo si Blue es el slot activo -->
-                                <Border Margin="6,0,0,0" Padding="4,1" CornerRadius="3"
-                                        Background="#1565C0" VerticalAlignment="Center">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding SelectedService.LiveSlot}" Value="Blue">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <TextBlock Text="LIVE" Foreground="White" FontSize="9" FontWeight="Bold"/>
-                                </Border>
-                            </StackPanel>
-                        </ToggleButton>
-
-                        <Rectangle Width="1" Fill="#3C3C3C" Margin="0,6"/>
-
-                        <!-- Tab: Green -->
-                        <ToggleButton x:Name="TabGreen" Tag="Green" Click="SlotTabClicked"
-                            Padding="12,0" Margin="0" BorderThickness="0,0,0,2"
-                            Foreground="#AAAAAA" Background="Transparent"
-                            FontSize="11" FontWeight="Bold" Cursor="Hand"
-                            IsEnabled="{Binding SelectedService.HasGreenInstance, FallbackValue=False}">
-                            <ToggleButton.Style>
-                                <Style TargetType="ToggleButton">
-                                    <Setter Property="BorderBrush" Value="Transparent"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border Background="{TemplateBinding Background}"
-                                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                                        Padding="{TemplateBinding Padding}">
-                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Background" Value="#1E1E1E"/>
-                                                        <Setter Property="BorderBrush" Value="#2E7D32"/>
-                                                        <Setter Property="Foreground" Value="#81C784"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Background" Value="#2D2D30"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsEnabled" Value="False">
-                                                        <Setter Property="Opacity" Value="0.35"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ToggleButton.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🟢 Green" VerticalAlignment="Center"/>
-                                <Border Margin="6,0,0,0" Padding="4,1" CornerRadius="3"
-                                        Background="#2E7D32" VerticalAlignment="Center">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding SelectedService.LiveSlot}" Value="Green">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <TextBlock Text="LIVE" Foreground="White" FontSize="9" FontWeight="Bold"/>
-                                </Border>
-                            </StackPanel>
-                        </ToggleButton>
-
-                        <!-- Nombre del servicio a la derecha -->
-                        <TextBlock Foreground="#555" FontSize="11" FontWeight="Bold"
-                                   VerticalAlignment="Center" Margin="16,0,12,0">
-                            <Run Text="— "/>
-                            <Run Text="{Binding SelectedService.Name, FallbackValue='(selecciona un servicio)'}"
-                                 Foreground="#777"/>
-                        </TextBlock>
-                    </StackPanel>
+                <!-- Log header: tabs | service name | clear -->
+                <Border Grid.Row="0" Background="#252526" BorderBrush="#2D2D30" BorderThickness="0,0,0,1">
+                    <DockPanel LastChildFill="False">
+                        <!-- slot tabs — left -->
+                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Stretch">
+                            <ToggleButton x:Name="TabAll"   Tag="{x:Null}" Content="All"
+                                          Style="{StaticResource SlotTab}"
+                                          IsChecked="True" Click="SlotTabClicked"/>
+                            <Rectangle Width="1" Fill="#333" Margin="0,7"/>
+                            <ToggleButton x:Name="TabBlue" Tag="Blue"
+                                          Style="{StaticResource SlotTab}"
+                                          Click="SlotTabClicked"
+                                          IsEnabled="{Binding SelectedService.HasBlueInstance, FallbackValue=False}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Blue" VerticalAlignment="Center"/>
+                                    <Border Margin="5,0,0,0" Padding="4,0" CornerRadius="3"
+                                            Background="#1565C0" VerticalAlignment="Center">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedService.LiveSlot}" Value="Blue">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="live" Foreground="White" FontSize="9" FontWeight="Bold"/>
+                                    </Border>
+                                </StackPanel>
+                            </ToggleButton>
+                            <Rectangle Width="1" Fill="#333" Margin="0,7"/>
+                            <ToggleButton x:Name="TabGreen" Tag="Green"
+                                          Style="{StaticResource SlotTab}"
+                                          Click="SlotTabClicked"
+                                          IsEnabled="{Binding SelectedService.HasGreenInstance, FallbackValue=False}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Green" VerticalAlignment="Center"/>
+                                    <Border Margin="5,0,0,0" Padding="4,0" CornerRadius="3"
+                                            Background="#2E7D32" VerticalAlignment="Center">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedService.LiveSlot}" Value="Green">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="live" Foreground="White" FontSize="9" FontWeight="Bold"/>
+                                    </Border>
+                                </StackPanel>
+                            </ToggleButton>
+                        </StackPanel>
+                        <!-- right: service name + clear -->
+                        <Button DockPanel.Dock="Right"
+                                x:Name="BtnClearLog" Content="Clear"
+                                Click="ClearLog_Click" ToolTip="Limpiar log visible"
+                                Style="{StaticResource BtnKill}"
+                                VerticalAlignment="Stretch" Padding="10,0" FontSize="11"/>
+                        <TextBlock DockPanel.Dock="Right"
+                                   Text="{Binding SelectedService.Name, FallbackValue=''}"
+                                   Foreground="#3A3A3A" FontSize="11"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    </DockPanel>
                 </Border>
 
-                <!-- Log vacío -->
+                <!-- empty state -->
                 <TextBlock Grid.Row="1"
-                           Text="Selecciona un servicio para ver sus logs."
-                           Foreground="#555" FontSize="14"
+                           Text="Selecciona un servicio para ver sus logs"
+                           Foreground="#3A3A3A" FontSize="13"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
                            Visibility="{Binding SelectedService, Converter={StaticResource BoolToVis},
                                         ConverterParameter=invert, FallbackValue=Visible}"/>
 
-                <!-- Log viewer -->
-                <ScrollViewer x:Name="LogScrollViewer"
-                              Grid.Row="1"
+                <!-- log viewer -->
+                <ScrollViewer x:Name="LogScrollViewer" Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Auto"
                               Background="#1A1A1A"
                               Visibility="{Binding SelectedService, Converter={StaticResource BoolToVis}}">
-                <TextBox x:Name="LogTextBox"
-                         Background="#1A1A1A"
-                         Foreground="#D4D4D4"
-                         FontFamily="Consolas"
-                         FontSize="12"
-                         BorderThickness="0"
-                         IsReadOnly="True"
-                         IsReadOnlyCaretVisible="False"
-                         IsUndoEnabled="False"
-                         TextWrapping="NoWrap"
-                         AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Disabled"
-                         HorizontalScrollBarVisibility="Disabled"
-                         Padding="6,4"/>
+                    <TextBox x:Name="LogTextBox"
+                             Background="#1A1A1A" Foreground="#C0C0C0"
+                             FontFamily="Consolas, Courier New" FontSize="12"
+                             BorderThickness="0" IsReadOnly="True"
+                             IsReadOnlyCaretVisible="False" IsUndoEnabled="False"
+                             TextWrapping="NoWrap" AcceptsReturn="True" AcceptsTab="False"
+                             VerticalScrollBarVisibility="Disabled"
+                             HorizontalScrollBarVisibility="Disabled"
+                             Padding="8,4"/>
                 </ScrollViewer>
             </Grid>
         </Grid>

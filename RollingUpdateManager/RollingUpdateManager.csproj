@@ -8,34 +8,36 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>RollingUpdateManager</AssemblyName>
     <RootNamespace>RollingUpdateManager</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
+    <Authors>matt-salis</Authors>
+    <Description>Zero-downtime Blue/Green rolling update manager for Java Spring Boot services on Windows. Embedded YARP reverse proxy, process supervisor, no Docker required.</Description>
+    <Copyright>© 2026 matt-salis</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/matt-salis/rolling-update-manager</RepositoryUrl>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <ApplicationIcon>logo.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- YARP: reverse proxy embebido -->
+    <!-- Embedded YARP reverse proxy -->
     <PackageReference Include="Yarp.ReverseProxy" Version="2.1.0" />
 
-    <!-- ASP.NET Core hosting para YARP embebido -->
+    <!-- ASP.NET Core hosting for embedded YARP -->
     <PackageReference Include="Microsoft.AspNetCore.Hosting" Version="2.2.7" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
 
-    <!-- JSON serialización -->
+    <!-- JSON serialization -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
 
     <!-- Logging -->
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
 
-    <!-- Comunity Toolkit MVVM -->
+    <!-- Community Toolkit MVVM -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
 
     <!-- Material Design WPF -->
     <PackageReference Include="MaterialDesignThemes" Version="5.0.0" />
-
-    <!-- Notificaciones en systray -->
-    <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
   </ItemGroup>
 
   <ItemGroup>
