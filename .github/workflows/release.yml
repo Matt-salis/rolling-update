@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore RollingUpdateManager.sln
+
+      - name: Run tests
+        run: dotnet test RollingUpdateManager.Tests/RollingUpdateManager.Tests.csproj --no-restore --verbosity minimal
+
+      # ── Single-file self-contained exe ──────────────────────────────────────
+      - name: Publish (single-file)
+        run: >
+          dotnet publish RollingUpdateManager/RollingUpdateManager.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/singlefile
+
+      - name: Rename single-file exe
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Move-Item publish/singlefile/RollingUpdateManager.exe `
+                    "publish/RollingUpdateManager-${tag}-win-x64.exe"
+        shell: pwsh
+
+      # ── Portable (framework-dependent) zip ──────────────────────────────────
+      - name: Publish (portable)
+        run: >
+          dotnet publish RollingUpdateManager/RollingUpdateManager.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          -o publish/portable-build
+
+      - name: Zip portable build
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Compress-Archive -Path publish/portable-build/* `
+                           -DestinationPath "publish/RollingUpdateManager-${tag}-portable.zip"
+        shell: pwsh
+
+      # ── Create GitHub Release ────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Rolling Update Manager ${{ github.ref_name }}"
+          body: |
+            ## Rolling Update Manager ${{ github.ref_name }}
+
+            ### Downloads
+            | File | Description |
+            |---|---|
+            | `RollingUpdateManager-${{ github.ref_name }}-win-x64.exe` | Self-contained single-file — no .NET runtime needed |
+            | `RollingUpdateManager-${{ github.ref_name }}-portable.zip` | Portable — requires .NET 8 runtime on the machine |
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what's new.
+          files: |
+            publish/RollingUpdateManager-${{ github.ref_name }}-win-x64.exe
+            publish/RollingUpdateManager-${{ github.ref_name }}-portable.zip
+          draft: false
+          prerelease: false
